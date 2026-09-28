@@ -53,6 +53,8 @@ jobs:
         shell: bash
         run: |
           export LIBCLANG_PATH="C:\\Program Files\\LLVM\\bin"
+          FFROOT=$(ls -d /c/ffmpeg/ffmpeg-* | head -1)
+          export CFLAGS="-I$(cygpath -w "$FFROOT")/include"
           cargo build --release
 
       - name: Install electron deps
@@ -83,7 +85,7 @@ jobs:
   # ---------- Debian 客户端 ----------
   build-debian:
     name: Debian / Ubuntu x64
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
