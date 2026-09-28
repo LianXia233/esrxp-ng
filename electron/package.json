@@ -29,8 +29,18 @@
     ],
     "win": {
       "target": [
-        { "target": "nsis", "arch": ["x64"] },
-        { "target": "portable", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
       ],
       "artifactName": "${productName}-${version}-win-${arch}.${ext}"
     },
@@ -40,7 +50,14 @@
       "createDesktopShortcut": true
     },
     "extraResources": [
-      { "from": "../rust-backend/target/release/", "to": "server/", "filter": ["esrxp-ng-server*"] }
+      {
+        "from": "../rust-backend/target/release/",
+        "to": "server/",
+        "filter": [
+          "esrxp-ng-server*"
+        ]
+      }
     ]
-  }
+  },
+  "homepage": "https://github.com/LianXia233/esrxp-ng"
 }

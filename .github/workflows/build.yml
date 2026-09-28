@@ -8,6 +8,8 @@ on:
 
 jobs:
   # ---------- Windows 客户端（Win11 目标） ----------
+  # 工具链：mingw-w64 GNU（gcc 对 FFmpeg import lib 链接友好，避开 MSVC cl 的 -I 解析问题）
+  # FFmpeg：BtbN n4.4 分支预编译（API 与 ffmpeg-next 4.4 匹配）
   build-win:
     name: Windows x64
     runs-on: windows-latest
@@ -24,20 +26,25 @@ jobs:
           cache: npm
           cache-dependency-path: electron/package-lock.json
 
-      - name: Install build tools (7zip, LLVM/libclang)
+      - name: Install LLVM (libclang for bindgen)
         shell: bash
         run: |
-          choco install -y 7zip llvm --no-progress
-          echo "C:\Program Files\LLVM\bin" >> "$GITHUB_PATH"
+          choco install -y llvm --no-progress
+          echo 'C:\Program Files\LLVM\bin' >> "$GITHUB_PATH"
 
-      - name: Download FFmpeg dev package (gyan.dev full build, headers+libs+dlls)
+      - name: Add mingw-w64 GNU target
+        shell: bash
+        run: rustup target add x86_64-pc-windows-gnu
+
+      - name: Download FFmpeg 4.4 dev package (BtbN n4.4 shared)
         shell: bash
         run: |
-          curl -L -o /tmp/ff.7z https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z
+          curl -L -o /tmp/ff.zip https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n4.4-latest-win64-gpl-shared.zip
           mkdir -p /c/ffmpeg
-          7z x /tmp/ff.7z -o/c/ffmpeg -y > /dev/null
+          cp /tmp/ff.zip /c/ffmpeg/ff.zip
+          powershell -Command "Expand-Archive -Path 'C:\ffmpeg\ff.zip' -DestinationPath 'C:\ffmpeg' -Force"
           FFROOT=$(ls -d /c/ffmpeg/ffmpeg-* | head -1)
-          echo "FFMPEG_DIR=$(cygpath -w $FFROOT)" >> "$GITHUB_ENV"
+          echo "FFMPEG_DIR=$(cygpath -w "$FFROOT")" >> "$GITHUB_ENV"
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -48,14 +55,12 @@ jobs:
             rust-backend/target
           key: win-cargo-${{ hashFiles('rust-backend/Cargo.lock') }}
 
-      - name: Build backend (release)
+      - name: Build backend (release, mingw-gnu)
         working-directory: rust-backend
         shell: bash
         run: |
-          export LIBCLANG_PATH="C:\\Program Files\\LLVM\\bin"
-          FFROOT=$(ls -d /c/ffmpeg/ffmpeg-* | head -1)
-          export CFLAGS="-I$(cygpath -w "$FFROOT")/include"
-          cargo build --release
+          export LIBCLANG_PATH='C:\Program Files\LLVM\bin'
+          cargo build --release --target x86_64-pc-windows-gnu
 
       - name: Install electron deps
         working-directory: electron
@@ -65,7 +70,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p electron/server
-          cp rust-backend/target/release/esrxp-ng-server.exe electron/server/
+          cp rust-backend/target/x86_64-pc-windows-gnu/release/esrxp-ng-server.exe electron/server/
           FFROOT=$(ls -d /c/ffmpeg/ffmpeg-* | head -1)
           cp "$FFROOT"/bin/*.dll electron/server/
 
@@ -83,6 +88,7 @@ jobs:
           generate_release_notes: true
 
   # ---------- Debian 客户端 ----------
+  # ubuntu-22.04（ffmpeg 4.4，与 ffmpeg-next 4.4 头文件匹配）
   build-debian:
     name: Debian / Ubuntu x64
     runs-on: ubuntu-22.04
