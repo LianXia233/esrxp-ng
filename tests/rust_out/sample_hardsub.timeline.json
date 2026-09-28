@@ -1,0 +1,73 @@
+{
+  "count": 3,
+  "style": {
+    "time_shift_10ms": 0
+  },
+  "subtitles": [
+    {
+      "bbox": [
+        407,
+        611,
+        466,
+        54
+      ],
+      "diff_frames": 1,
+      "end": 1.52,
+      "end_frame": 38,
+      "index": 1,
+      "roi_origin": [
+        0,
+        0
+      ],
+      "start": 0.52,
+      "start_frame": 13
+    },
+    {
+      "bbox": [
+        418,
+        617,
+        445,
+        48
+      ],
+      "diff_frames": 1,
+      "end": 3.0,
+      "end_frame": 75,
+      "index": 2,
+      "roi_origin": [
+        0,
+        0
+      ],
+      "start": 2.0,
+      "start_frame": 50
+    },
+    {
+      "bbox": [
+        361,
+        611,
+        528,
+        54
+      ],
+      "diff_frames": 1,
+      "end": 4.72,
+      "end_frame": 118,
+      "index": 3,
+      "roi_origin": [
+        0,
+        0
+      ],
+      "start": 3.52,
+      "start_frame": 88
+    }
+  ],
+  "video": {
+    "codec": "h264",
+    "decode_backend": "CPU (软件)",
+    "duration_s": 5.0,
+    "fps": 25.0,
+    "frame_count": 125,
+    "height": 720,
+    "path": "sample_hardsub.mp4",
+    "pix_fmt": "yuv420p",
+    "width": 1280
+  }
+}

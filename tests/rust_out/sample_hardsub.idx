@@ -1,0 +1,16 @@
+v8
+# VobSub index file, v8 (do not modify this line!)
+size: 1280x720
+org: 0, 0
+scale: 100%, 100%
+smooth: OFF
+fade: 0, 0
+align: 0, 0
+time offset: 0
+forced subs: OFF
+palette: 008080, ff8080, 000000, 000000, 000000, 000000, 000000, 000000, 000000, 000000, 000000, 000000, 000000, 000000, 000000, 000000
+langidx: 0
+id: en, index: 0
+timestamp: 00:00:00:520, filepos: 000000000
+timestamp: 00:00:02:000, filepos: 000000bac
+timestamp: 00:00:03:520, filepos: 00000170b

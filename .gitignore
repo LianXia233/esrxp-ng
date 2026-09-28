@@ -1,0 +1,27 @@
+# Rust
+rust-backend/target/
+rust-backend/Cargo.lock.orig
+
+# Node / Electron
+electron/node_modules/
+electron/release/
+npm-debug.log*
+
+# Python
+__pycache__/
+*.pyc
+.esrxp_venv/
+
+# 构建产物
+*.zip
+*.7z
+*.exe
+*.deb
+
+# 系统
+.DS_Store
+Thumbs.db
+
+# 测试输出目录（保留文本验证产物，忽略二进制）
+tests/*/subtitle_imgs/
+*.sub

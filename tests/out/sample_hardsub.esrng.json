@@ -1,0 +1,178 @@
+{
+  "format": "esrxp-ng/project",
+  "version": 1,
+  "video": "sample_hardsub.mp4",
+  "config": {
+    "rip": {
+      "frame_skip": 1,
+      "pixel_difference": 20,
+      "ignore_change_percent": 0.5,
+      "diff_threshold": 24,
+      "gap_frames": 5
+    },
+    "region": {
+      "up": 0,
+      "down": 0,
+      "left": 0,
+      "right": 0,
+      "scale": 1.0,
+      "sharpen": false
+    },
+    "filter": {
+      "method": "color_outline",
+      "subtitle_color": [
+        255,
+        254,
+        255
+      ],
+      "outline_color": [
+        0,
+        0,
+        0
+      ],
+      "pixel_compensate": 1,
+      "segments": {
+        "outline": {
+          "hue": 0,
+          "hue_diff": 10,
+          "rgb": [
+            0,
+            0,
+            0
+          ],
+          "rgb_diff": 30,
+          "lum_min": 0,
+          "lum_max": 255,
+          "sat_min": 0,
+          "sat_max": 255,
+          "enable_hue": false,
+          "enable_rgb": true,
+          "enable_lum_min": false,
+          "enable_lum_max": false,
+          "enable_sat_min": false,
+          "enable_sat_max": false
+        },
+        "pass1": {
+          "hue": 150,
+          "hue_diff": 10,
+          "rgb": [
+            255,
+            254,
+            255
+          ],
+          "rgb_diff": 40,
+          "lum_min": 0,
+          "lum_max": 255,
+          "sat_min": 0,
+          "sat_max": 255,
+          "enable_hue": false,
+          "enable_rgb": true,
+          "enable_lum_min": false,
+          "enable_lum_max": false,
+          "enable_sat_min": false,
+          "enable_sat_max": false
+        },
+        "final": {
+          "hue": 150,
+          "hue_diff": 10,
+          "rgb": [
+            255,
+            254,
+            255
+          ],
+          "rgb_diff": 40,
+          "lum_min": 0,
+          "lum_max": 255,
+          "sat_min": 0,
+          "sat_max": 255,
+          "enable_hue": false,
+          "enable_rgb": true,
+          "enable_lum_min": false,
+          "enable_lum_max": false,
+          "enable_sat_min": false,
+          "enable_sat_max": false
+        }
+      }
+    },
+    "postprocess": {
+      "single_dot": true,
+      "single_line": true,
+      "large_block": 0,
+      "touch_edge": false,
+      "pass_center": true,
+      "center_tolerance": 0.12
+    },
+    "style": {
+      "unicode": true,
+      "time_shift_10ms": 0,
+      "outline_width": 1,
+      "shadow_depth": 0,
+      "primary_color": "&H00FFFFFF&",
+      "outline_color_ssa": "&H00000000&"
+    },
+    "output": {
+      "ssa": true,
+      "vobsub": true,
+      "ocr_png": true,
+      "json_timeline": true,
+      "ocr": {
+        "per_image": 1,
+        "scale": 1.0,
+        "divid_into_2_lines": false
+      },
+      "max_subtitle_width": 720,
+      "fps": null
+    },
+    "start_seconds": 0.0,
+    "end_seconds": 0.0,
+    "verbose": false
+  },
+  "artifacts": {
+    "ssa": "tests/out/sample_hardsub.ass",
+    "sub": "tests/out/sample_hardsub.sub",
+    "idx": "tests/out/sample_hardsub.idx",
+    "ocr_images": "[PosixPath('tests/out/subtitle_imgs/subtitle_0001.png'), PosixPath('tests/out/subtitle_imgs/subtitle_0002.png'), PosixPath('tests/out/subtitle_imgs/subtitle_0003.png')]",
+    "timeline": "tests/out/sample_hardsub.timeline.json"
+  },
+  "subtitles": [
+    {
+      "index": 1,
+      "start": 0.52,
+      "end": 1.52,
+      "start_frame": 13,
+      "end_frame": 38,
+      "bbox": [
+        407,
+        611,
+        466,
+        54
+      ]
+    },
+    {
+      "index": 2,
+      "start": 2.0,
+      "end": 3.0,
+      "start_frame": 50,
+      "end_frame": 75,
+      "bbox": [
+        418,
+        617,
+        445,
+        48
+      ]
+    },
+    {
+      "index": 3,
+      "start": 3.52,
+      "end": 4.72,
+      "start_frame": 88,
+      "end_frame": 118,
+      "bbox": [
+        361,
+        611,
+        528,
+        54
+      ]
+    }
+  ]
+}

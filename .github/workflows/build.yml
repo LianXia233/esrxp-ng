@@ -1,0 +1,137 @@
+name: build-release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  # ---------- Windows 客户端（Win11 目标） ----------
+  build-win:
+    name: Windows x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+
+      - name: Install build tools (7zip, LLVM/libclang)
+        shell: bash
+        run: |
+          choco install -y 7zip llvm --no-progress
+          echo "C:\Program Files\LLVM\bin" >> "$GITHUB_PATH"
+
+      - name: Download FFmpeg dev package (gyan.dev full build, headers+libs+dlls)
+        shell: bash
+        run: |
+          curl -L -o /tmp/ff.7z https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z
+          mkdir -p /c/ffmpeg
+          7z x /tmp/ff.7z -o/c/ffmpeg -y > /dev/null
+          FFROOT=$(ls -d /c/ffmpeg/ffmpeg-* | head -1)
+          echo "FFMPEG_DIR=$(cygpath -w $FFROOT)" >> "$GITHUB_ENV"
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust-backend/target
+          key: win-cargo-${{ hashFiles('rust-backend/Cargo.lock') }}
+
+      - name: Build backend (release)
+        working-directory: rust-backend
+        shell: bash
+        run: |
+          export LIBCLANG_PATH="C:\\Program Files\\LLVM\\bin"
+          cargo build --release
+
+      - name: Install electron deps
+        working-directory: electron
+        run: npm ci
+
+      - name: Stage backend + FFmpeg runtime into electron/server
+        shell: bash
+        run: |
+          mkdir -p electron/server
+          cp rust-backend/target/release/esrxp-ng-server.exe electron/server/
+          FFROOT=$(ls -d /c/ffmpeg/ffmpeg-* | head -1)
+          cp "$FFROOT"/bin/*.dll electron/server/
+
+      - name: Build Windows installer + portable
+        working-directory: electron
+        run: npx electron-builder --win --x64
+
+      - name: Upload release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            electron/release/*.exe
+            electron/release/*.zip
+          generate_release_notes: true
+
+  # ---------- Debian 客户端 ----------
+  build-debian:
+    name: Debian / Ubuntu x64
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install FFmpeg dev + libclang
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libavformat-dev libavcodec-dev libavutil-dev libswscale-dev \
+            libavfilter-dev libswresample-dev libavdevice-dev libclang-dev pkg-config
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust-backend/target
+          key: deb-cargo-${{ hashFiles('rust-backend/Cargo.lock') }}
+
+      - name: Build backend (release)
+        working-directory: rust-backend
+        run: cargo build --release
+
+      - name: Install electron deps
+        working-directory: electron
+        run: npm ci
+
+      - name: Stage backend into electron/server
+        run: |
+          mkdir -p electron/server
+          cp rust-backend/target/release/esrxp-ng-server electron/server/
+
+      - name: Build Debian package
+        working-directory: electron
+        run: npx electron-builder --linux deb --x64
+
+      - name: Upload release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: electron/release/*.deb
+          generate_release_notes: true

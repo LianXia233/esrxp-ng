@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>esrxp-ng · 硬字幕提取</title>
+<link rel="stylesheet" href="./vendor/tdesign.min.css">
+<style>
+  :root { --brand: #0052d9; }
+  body { margin: 0; background: #f3f5f8; font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; }
+  .app-header { display:flex; align-items:center; gap:12px; padding:14px 24px; background:#fff; box-shadow:0 1px 4px rgba(0,0,0,.06); position:sticky; top:0; z-index:10; }
+  .app-header .logo { width:30px; height:30px; border-radius:8px; background:linear-gradient(135deg,#0052d9,#00b4ff); display:flex; align-items:center; justify-content:center; color:#fff; font-weight:700; font-size:15px; }
+  .app-header h1 { font-size:17px; margin:0; color:#1a1f24; font-weight:600; }
+  .app-header .sub { font-size:12px; color:#8b93a1; }
+  .app-header .right { margin-left:auto; display:flex; align-items:center; gap:10px; font-size:12px; color:#8b93a1; }
+  .main { max-width: 1180px; margin: 18px auto 60px; padding: 0 16px; display: flex; flex-direction: column; gap: 14px; }
+  .card { background:#fff; border-radius:10px; box-shadow:0 1px 4px rgba(0,0,0,.05); padding:18px 20px; }
+  .card h2 { font-size:14px; margin:0 0 14px; color:#1a1f24; display:flex; align-items:center; gap:8px; }
+  .card h2 .step { background:var(--brand); color:#fff; border-radius:6px; font-size:12px; width:20px; height:20px; display:inline-flex; align-items:center; justify-content:center; }
+  .row { display:flex; flex-wrap:wrap; gap:12px; align-items:center; }
+  .form-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap:12px 16px; }
+  .form-grid .field label { font-size:12px; color:#5f6672; display:block; margin-bottom:5px; }
+  .meta-tags { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+  .preview-box { display:flex; gap:12px; align-items:flex-start; }
+  .preview-box img { max-width:100%; border-radius:8px; border:1px solid #e5e8ee; background:#000; }
+  .preview-box .ph { width:100%; height:180px; border-radius:8px; border:1px dashed #d4d9e0; display:flex; align-items:center; justify-content:center; color:#9aa1ac; font-size:13px; background:#fafbfc; }
+  .log-box { background:#0f172a; color:#cbd5e1; font-family:"Cascadia Code",Consolas,monospace; font-size:12px; border-radius:8px; padding:12px; height:150px; overflow:auto; white-space:pre-wrap; }
+  .progress-row { display:flex; align-items:center; gap:14px; }
+  .artifact-table { width:100%; border-collapse:collapse; font-size:13px; }
+  .artifact-table th, .artifact-table td { text-align:left; padding:8px 10px; border-bottom:1px solid #eef1f5; }
+  .artifact-table th { color:#5f6672; font-weight:500; background:#fafbfc; }
+  .dl-link { color:var(--brand); text-decoration:none; }
+  .dl-link:hover { text-decoration:underline; }
+  .flex-between { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  @media (max-width:760px){ .form-grid{grid-template-columns:1fr 1fr;} .preview-box{flex-direction:column;} }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="app-header">
+    <div class="logo">E</div>
+    <h1>esrxp-ng</h1>
+    <span class="sub">硬字幕提取 · VobSub / SSA / OCR</span>
+    <div class="right">
+      <span id="apiInfo"></span>
+    </div>
+  </div>
+
+  <div class="main">
+    <!-- 1. 打开视频 -->
+    <div class="card">
+      <h2><span class="step">1</span>打开视频</h2>
+      <div class="row">
+        <t-input :model-value="videoPath" placeholder="输入视频文件路径（如 D:\videos\sample.mp4）" clearable style="min-width:420px;flex:1" @change="onPathInput"></t-input>
+        <t-button theme="primary" @click="openVideo" :loading="opening">打开视频</t-button>
+        <t-button v-if="hasElectron" theme="outline" @click="pickVideo">浏览…</t-button>
+      </div>
+      <div class="meta-tags" v-if="vinfo">
+        <t-tag theme="primary" variant="light">{{vinfo.width}} × {{vinfo.height}}</t-tag>
+        <t-tag theme="success" variant="light">{{vinfo.fps.toFixed(2)}} fps</t-tag>
+        <t-tag theme="warning" variant="light">{{vinfo.duration_s.toFixed(2)}} s</t-tag>
+        <t-tag variant="light">{{vinfo.frame_count}} 帧</t-tag>
+        <t-tag variant="light">{{vinfo.codec}}</t-tag>
+        <t-tag variant="light">{{vinfo.pix_fmt}}</t-tag>
+        <t-tag v-if="decoderBackend" theme="danger" variant="light">解码: {{decoderBackend}}</t-tag>
+      </div>
+    </div>
+
+    <!-- 2. 参数 -->
+    <div class="card">
+      <h2><span class="step">2</span>提取参数</h2>
+      <t-tabs :default-value="'rip'" size="medium">
+        <t-tab-panel value="rip" label="抓取">
+          <div class="form-grid" style="margin-top:10px;">
+            <div class="field"><label>影像跳读 (frame_skip)</label>
+              <t-input-number :value="cfg.rip.frame_skip" :min="0" :max="60" @change="v=>set('rip.frame_skip',v)"></t-input-number></div>
+            <div class="field"><label>像点相差 (pixel_difference)</label>
+              <t-input-number :value="cfg.rip.pixel_difference" :min="0" :max="100000" @change="v=>set('rip.pixel_difference',v)"></t-input-number></div>
+            <div class="field"><label>忽略改变 % (×0.01)</label>
+              <t-input-number :value="cfg.rip.ignore_change_percent" :min="0" :max="100" :step="0.1" @change="v=>set('rip.ignore_change_percent',v)"></t-input-number></div>
+            <div class="field"><label>变化阈值 (diff_threshold)</label>
+              <t-input-number :value="cfg.rip.diff_threshold" :min="0" :max="255" @change="v=>set('rip.diff_threshold',v)"></t-input-number></div>
+            <div class="field"><label>字幕分段 (gap_frames)</label>
+              <t-input-number :value="cfg.rip.gap_frames" :min="0" :max="200" @change="v=>set('rip.gap_frames',v)"></t-input-number></div>
+            <div class="field"><label>起始秒</label>
+              <t-input-number :value="cfg.start_seconds" :min="0" :step="0.1" @change="v=>set('start_seconds',v)"></t-input-number></div>
+            <div class="field"><label>结束秒</label>
+              <t-input-number :value="cfg.end_seconds" :min="0" :step="0.1" @change="v=>set('end_seconds',v)"></t-input-number></div>
+          </div>
+        </t-tab-panel>
+        <t-tab-panel value="region" label="区域">
+          <div class="form-grid" style="margin-top:10px;">
+            <div class="field"><label>上 (up)</label>
+              <t-input-number :value="cfg.region.up" :min="0" :max="2000" @change="v=>set('region.up',v)"></t-input-number></div>
+            <div class="field"><label>下 (down)</label>
+              <t-input-number :value="cfg.region.down" :min="0" :max="2000" @change="v=>set('region.down',v)"></t-input-number></div>
+            <div class="field"><label>左 (left)</label>
+              <t-input-number :value="cfg.region.left" :min="0" :max="2000" @change="v=>set('region.left',v)"></t-input-number></div>
+            <div class="field"><label>右 (right)</label>
+              <t-input-number :value="cfg.region.right" :min="0" :max="2000" @change="v=>set('region.right',v)"></t-input-number></div>
+            <div class="field"><label>缩放 (scale)</label>
+              <t-input-number :value="cfg.region.scale" :min="0.1" :max="4" :step="0.1" @change="v=>set('region.scale',v)"></t-input-number></div>
+            <div class="field"><label>锐化</label>
+              <t-switch :value="cfg.region.sharpen" @change="v=>set('region.sharpen',v)"></t-switch></div>
+          </div>
+        </t-tab-panel>
+        <t-tab-panel value="filter" label="过滤">
+          <div class="form-grid" style="margin-top:10px;">
+            <div class="field"><label>方法 (method)</label>
+              <t-select :value="cfg.filter.method" @change="v=>set('filter.method',v)" style="width:100%">
+                <t-option v-for="m in ['color','color_outline']" :key="m" :value="m" :label="m"></t-option>
+              </t-select></div>
+            <div class="field"><label>字幕颜色 (subtitle_color)</label>
+              <div class="row"><input type="color" :value="rgbToHex(cfg.filter.subtitle_color)" @change="e=>set('filter.subtitle_color',hexToRgb(e.target.value))" style="width:44px;height:30px;border:none;background:none;cursor:pointer"></div></div>
+            <div class="field"><label>描边颜色 (outline_color)</label>
+              <input type="color" :value="rgbToHex(cfg.filter.outline_color)" @change="e=>set('filter.outline_color',hexToRgb(e.target.value))" style="width:44px;height:30px;border:none;background:none;cursor:pointer"></div>
+            <div class="field"><label>像点补偿 (pixel_compensate)</label>
+              <t-input-number :value="cfg.filter.pixel_compensate" :min="0" :max="20" @change="v=>set('filter.pixel_compensate',v)"></t-input-number></div>
+          </div>
+        </t-tab-panel>
+        <t-tab-panel value="post" label="后处理">
+          <div class="row" style="gap:18px;margin-top:10px;">
+            <t-checkbox :checked="cfg.postprocess.single_dot" @change="v=>set('postprocess.single_dot',v)">移除单点</t-checkbox>
+            <t-checkbox :checked="cfg.postprocess.single_line" @change="v=>set('postprocess.single_line',v)">移除单行</t-checkbox>
+            <t-checkbox :checked="cfg.postprocess.pass_center" @change="v=>set('postprocess.pass_center',v)">保留跨中带</t-checkbox>
+            <t-checkbox :checked="cfg.postprocess.touch_edge" @change="v=>set('postprocess.touch_edge',v)">移除触边</t-checkbox>
+            <div class="field"><label>大面积块下限 (large_block)</label>
+              <t-input-number :value="cfg.postprocess.large_block" :min="0" :max="100000" @change="v=>set('postprocess.large_block',v)"></t-input-number></div>
+          </div>
+        </t-tab-panel>
+        <t-tab-panel value="out" label="输出">
+          <div class="row" style="gap:18px;margin-top:10px;">
+            <t-checkbox :checked="cfg.output.ssa" @change="v=>set('output.ssa',v)">SSA 字幕</t-checkbox>
+            <t-checkbox :checked="cfg.output.vobsub" @change="v=>set('output.vobsub',v)">VobSub (.sub/.idx)</t-checkbox>
+            <t-checkbox :checked="cfg.output.ocr_png" @change="v=>set('output.ocr_png',v)">OCR 位图</t-checkbox>
+            <t-checkbox :checked="cfg.output.json_timeline" @change="v=>set('output.json_timeline',v)">时间轴 JSON</t-checkbox>
+            <div class="field"><label>最大字幕宽度</label>
+              <t-input-number :value="cfg.output.max_subtitle_width" :min="10" :max="4000" @change="v=>set('output.max_subtitle_width',v)"></t-input-number></div>
+          </div>
+        </t-tab-panel>
+      </t-tabs>
+    </div>
+
+    <!-- 3. 预览 -->
+    <div class="card">
+      <h2><span class="step">3</span>帧预览 <span style="font-weight:400;color:#8b93a1;font-size:12px">（原图 / 提取 mask / 仅 mask 叠加）</span></h2>
+      <div class="row" style="margin-bottom:12px;">
+        <t-input-number :value="previewFrame" :min="0" :max="maxFrame" @change="v=>previewFrame=v"></t-input-number>
+        <t-button theme="primary" variant="outline" @click="doPreview" :loading="previewing">预览</t-button>
+        <t-switch v-model="regionOnly" size="small"></t-switch>
+        <span style="font-size:12px;color:#5f6672">仅 ROI 区域</span>
+      </div>
+      <div class="preview-box">
+        <img v-if="previewUrl" :src="previewUrl" alt="预览">
+        <div v-else class="ph">打开视频后点击「预览」查看抓取效果</div>
+      </div>
+    </div>
+
+    <!-- 4. 抓取 -->
+    <div class="card">
+      <h2><span class="step">4</span>抓取字幕</h2>
+      <div class="row" style="margin-bottom:14px;">
+        <t-input :model-value="outDir" placeholder="输出目录（留空则输出到视频所在目录）" clearable style="min-width:420px;flex:1" @change="v=>outDir=v"></t-input>
+        <t-button v-if="hasElectron" theme="outline" @click="pickOutDir">浏览…</t-button>
+        <t-button theme="primary" @click="startRip" :loading="ripping" :disabled="!videoPath">开始抓取</t-button>
+      </div>
+      <div class="progress-row" v-if="job && job.status==='running'">
+        <t-progress :percentage="jobPct" :label="false" style="flex:1"></t-progress>
+        <span style="font-size:12px;color:#5f6672">{{job.progress.found}} 条候选</span>
+      </div>
+      <div class="log-box" v-if="job && job.log.length">{{ job.log.join('\n') }}</div>
+    </div>
+
+    <!-- 5. 产物 -->
+    <div class="card" v-if="artifacts.length">
+      <h2><span class="step">5</span>提取产物</h2>
+      <table class="artifact-table">
+        <thead><tr><th>类型</th><th>文件</th><th style="width:110px">下载</th></tr></thead>
+        <tbody>
+          <tr v-for="a in artifacts" :key="a.name">
+            <td><t-tag :theme="a.kind==='ass'?'success':(a.kind==='sub'||a.kind==='idx'?'warning':'default')" variant="light">{{a.kind}}</t-tag></td>
+            <td style="font-family:Consolas,monospace;font-size:12px">{{a.path}}</td>
+            <td><a class="dl-link" :href="'/api/artifact?path='+encodeURIComponent(a.path)" target="_blank">下载</a></td>
+          </tr>
+        </tbody>
+      </table>
+      <div v-if="subtitleEvents.length" style="margin-top:14px;">
+        <div style="font-size:12px;color:#5f6672;margin-bottom:8px;">检测到 {{subtitleEvents.length}} 条字幕</div>
+        <table class="artifact-table">
+          <thead><tr><th>#</th><th>开始</th><th>结束</th><th>时长</th><th>bbox (x,y,w,h)</th><th>变化帧</th></tr></thead>
+          <tbody>
+            <tr v-for="e in subtitleEvents" :key="e.index">
+              <td>{{e.index}}</td>
+              <td>{{e.start.toFixed(2)}}s</td>
+              <td>{{e.end.toFixed(2)}}s</td>
+              <td>{{e.duration.toFixed(2)}}s</td>
+              <td style="font-family:Consolas,monospace;font-size:12px">{{e.bbox.join(', ')}}</td>
+              <td>{{e.diff_frames}}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div style="text-align:center;color:#a2a9b3;font-size:12px;padding:10px 0;">esrxp-ng · Rust + FFmpeg + TDesign · CUDA 可用时自动启用 GPU 解码与像素内核</div>
+  </div>
+</div>
+
+<script src="./vendor/vue.global.prod.js"></script>
+<script src="./vendor/tdesign.min.js"></script>
+<script>
+const { createApp } = Vue;
+const app = createApp({
+  data() {
+    return {
+      videoPath: '',
+      outDir: '',
+      vinfo: null,
+      opening: false,
+      previewing: false,
+      previewFrame: 0,
+      regionOnly: false,
+      previewUrl: null,
+      maxFrame: 0,
+      job: null,
+      jobTimer: null,
+      ripping: false,
+      artifacts: [],
+      subtitleEvents: [],
+      decoderBackend: '',
+      hasElectron: !!(window.esrxp && window.esrxp.selectVideo),
+      cfg: {
+        rip: { frame_skip: 1, pixel_difference: 20, ignore_change_percent: 0.5, diff_threshold: 24, gap_frames: 5 },
+        region: { up: 0, down: 0, left: 0, right: 0, scale: 1.0, sharpen: false },
+        filter: { method: 'color_outline', subtitle_color: [255,255,255], outline_color: [0,0,0], pixel_compensate: 1 },
+        postprocess: { single_dot: true, single_line: true, large_block: 0, touch_edge: false, pass_center: true, center_tolerance: 0.12 },
+        output: { ssa: true, vobsub: true, ocr_png: true, json_timeline: true, max_subtitle_width: 720 },
+        start_seconds: 0, end_seconds: 0, verbose: false,
+      },
+    };
+  },
+  computed: {
+    jobPct() {
+      if (!this.job || !this.job.progress) return 0;
+      const p = this.job.progress;
+      return p.total > 0 ? Math.round(p.done / p.total * 100) : 0;
+    },
+  },
+  methods: {
+    set(path, v) {
+      const parts = path.split('.');
+      let obj = this.cfg;
+      for (let i = 0; i < parts.length - 1; i++) obj = obj[parts[i]];
+      obj[parts[parts.length - 1]] = v;
+    },
+    rgbToHex(rgb) { return '#' + rgb.map(v => v.toString(16).padStart(2, '0')).join(''); },
+    hexToRgb(hex) {
+      const n = parseInt(hex.slice(1), 16);
+      return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    },
+    onPathInput(v) { this.videoPath = v; },
+    async api(path, body) {
+      const r = await fetch(path, {
+        method: body !== undefined ? 'POST' : 'GET',
+        headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+      const ct = r.headers.get('Content-Type') || '';
+      if (ct.includes('image')) return { blob: await r.blob() };
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok && j.error) throw new Error(j.error);
+      return j;
+    },
+    async openVideo() {
+      if (!this.videoPath) { this.$message.warning('请先输入视频路径'); return; }
+      this.opening = true;
+      try {
+        this.vinfo = await this.api('/api/video/open', { path: this.videoPath });
+        this.maxFrame = this.vinfo.frame_count - 1;
+        this.outDir = this.outDir || this.vinfo.path.replace(/[\\/][^\\/]*$/, '');
+        this.$message.success('视频已打开');
+      } catch (e) { this.$message.error(e.message); }
+      this.opening = false;
+    },
+    async doPreview() {
+      if (!this.videoPath) { this.$message.warning('请先打开视频'); return; }
+      this.previewing = true;
+      try {
+        const r = await this.api('/api/preview', {
+          path: this.videoPath, frame: this.previewFrame,
+          config: this.cfg, region_only: this.regionOnly,
+        });
+        if (r.image) this.previewUrl = r.image;
+        else if (r.blob) this.previewUrl = URL.createObjectURL(r.blob);
+      } catch (e) { this.$message.error(e.message); }
+      this.previewing = false;
+    },
+    async startRip() {
+      if (!this.videoPath) { this.$message.warning('请先打开视频'); return; }
+      this.ripping = true;
+      this.artifacts = [];
+      this.subtitleEvents = [];
+      this.job = null;
+      try {
+        const r = await this.api('/api/rip', {
+          path: this.videoPath,
+          out_dir: this.outDir || '',
+          config: this.cfg,
+          auto_color: true,
+        });
+        this.job = { id: r.job_id, status: 'running', progress: { done: 0, total: 0, found: 0 }, log: [] };
+        this.jobTimer = setInterval(() => this.pollJob(), 800);
+        this.$message.success('抓取任务已启动');
+      } catch (e) { this.$message.error(e.message); this.ripping = false; }
+    },
+    async pollJob() {
+      try {
+        const j = await this.api('/api/jobs/' + this.job.id);
+        this.job = j;
+        if (j.status === 'done' || j.status === 'error') {
+          clearInterval(this.jobTimer);
+          this.ripping = false;
+          if (j.status === 'error') { this.$message.error('抓取失败：' + (j.log || []).join('\n')); return; }
+          this.$message.success('抓取完成');
+          if (j.result) {
+            const arts = j.result.artifacts || {};
+            this.artifacts = Object.entries(arts).map(([k, path]) => {
+              if (k === 'ocr_images') return { kind: 'png', name: k, path };
+              if (typeof path !== 'string') return null;
+              const kindMap = { ass: 'ass', sub: 'sub', idx: 'idx', timeline: 'json', project: 'json' };
+              return { kind: kindMap[k] || 'file', name: k, path };
+            }).filter(Boolean);
+            this.subtitleEvents = j.result.events || [];
+            this.decoderBackend = j.result.decoder_backend || '';
+          }
+        }
+      } catch (e) { clearInterval(this.jobTimer); this.ripping = false; }
+    },
+    async pickVideo() { const p = await window.esrxp.selectVideo(); if (p) { this.videoPath = p; this.openVideo(); } },
+    async pickOutDir() { const p = await window.esrxp.selectOutDir(); if (p) this.outDir = p; },
+  },
+  async mounted() {
+    window.__vm = this; // 自动化/调试钩子
+    try {
+      const info = await this.api('/api/info');
+      document.getElementById('apiInfo').textContent = '后端 ' + info.version;
+    } catch (e) { document.getElementById('apiInfo').textContent = '后端未连接'; }
+  },
+});
+app.use(TDesign);
+app.mount('#app');
+</script>
+</body>
+</html>

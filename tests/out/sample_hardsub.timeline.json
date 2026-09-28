@@ -1,0 +1,72 @@
+{
+  "video": {
+    "path": "sample_hardsub.mp4",
+    "width": 1280,
+    "height": 720,
+    "fps": 25.0,
+    "duration_s": 5.0,
+    "frame_count": 125,
+    "codec": "h264",
+    "pix_fmt": "yuv420p"
+  },
+  "style": {
+    "time_shift_10ms": 0
+  },
+  "count": 3,
+  "subtitles": [
+    {
+      "index": 1,
+      "start": 0.52,
+      "end": 1.52,
+      "start_frame": 13,
+      "end_frame": 38,
+      "bbox": [
+        407,
+        611,
+        466,
+        54
+      ],
+      "roi_origin": [
+        0,
+        0
+      ],
+      "diff_frames": 1
+    },
+    {
+      "index": 2,
+      "start": 2.0,
+      "end": 3.0,
+      "start_frame": 50,
+      "end_frame": 75,
+      "bbox": [
+        418,
+        617,
+        445,
+        48
+      ],
+      "roi_origin": [
+        0,
+        0
+      ],
+      "diff_frames": 1
+    },
+    {
+      "index": 3,
+      "start": 3.52,
+      "end": 4.72,
+      "start_frame": 88,
+      "end_frame": 118,
+      "bbox": [
+        361,
+        611,
+        528,
+        54
+      ],
+      "roi_origin": [
+        0,
+        0
+      ],
+      "diff_frames": 1
+    }
+  ]
+}
