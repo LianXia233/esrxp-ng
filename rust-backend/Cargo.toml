@@ -11,7 +11,7 @@ tower-http = { version = "0.6", features = ["fs", "cors"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
-ffmpeg-next = { version = "4.4.0", default-features = false, features = [
+ffmpeg-next = { version = "7.0", default-features = false, features = [
     "codec", "format", "software-scaling", "software-resampling",
     "filter", "device",
 ] }
@@ -23,7 +23,3 @@ libloading = "0.8"
 # build+static：从源码编译并静态链接 FFmpeg（Linux/Debian 单二进制零依赖）
 # Win 使用动态 BtbN 包随安装包分发，不启用本 feature
 vendored-ffmpeg = ["ffmpeg-next/build", "ffmpeg-next/static"]
-
-[profile.release]
-opt-level = 3
-lto = true
