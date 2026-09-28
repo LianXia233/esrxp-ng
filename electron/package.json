@@ -4,7 +4,10 @@
   "version": "0.1.1",
   "description": "esrXP 现代化重构：FFmpeg 解码 + Rust 引擎 + TDesign UI。从视频中提取硬字幕为 VobSub/SSA/OCR 位图。",
   "main": "main.js",
-  "author": "esrxp-ng",
+  "author": {
+    "name": "LianXia233",
+    "email": "a11879ab123@gmail.com"
+  },
   "license": "MIT",
   "scripts": {
     "start": "electron .",

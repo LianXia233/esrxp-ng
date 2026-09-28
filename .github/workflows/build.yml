@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   # ---------- Windows 客户端（Win11 目标） ----------
   # 工具链：mingw-w64 GNU（gcc 对 FFmpeg import lib 链接友好，避开 MSVC cl 的 -I 解析问题）
