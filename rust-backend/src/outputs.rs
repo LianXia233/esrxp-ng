@@ -40,6 +40,39 @@ fn shift(ev: &SubtitleEvent, shift_10ms: i64) -> (f64, f64) {
     (ev.start + d, ev.end + d)
 }
 
+/// SRT 时间码：HH:MM:SS,mmm
+pub fn srt_time(t: f64) -> String {
+    let t = t.max(0.0);
+    let h = (t / 3600.0) as i64;
+    let m = ((t % 3600.0) / 60.0) as i64;
+    let s = t as i64 % 60;
+    let ms = ((t - t.floor()) * 1000.0).round() as i64;
+    let ms = ms.min(999);
+    format!("{h:02}:{m:02}:{s:02},{ms:03}")
+}
+
+/// 写出 SRT —— 仅时间轴，不含文本。
+/// 硬字幕是位图像素，无法可靠转录为文本；SRT 作为「字幕图片出现区间」的时间索引，
+/// 配合 OCR 位图/SSA 使用。条目格式：序号 + start --> end + 空文本行。
+pub fn write_srt(events: &[SubtitleEvent], cfg: &AppConfig, out: &Path) -> Result<()> {
+    let st = &cfg.style;
+    let mut s = String::new();
+    for (i, ev) in events.iter().enumerate() {
+        let (start, end) = shift(ev, st.time_shift_10ms);
+        s.push_str(&format!(
+            "{}
+{} --> {}
+
+",
+            i + 1,
+            srt_time(start),
+            srt_time(end)
+        ));
+    }
+    fs::write(out, s)?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------- SSA
 pub fn write_ssa(events: &[SubtitleEvent], video_w: usize, video_h: usize,
                  cfg: &AppConfig, out: &Path) -> Result<()> {
@@ -50,38 +83,42 @@ pub fn write_ssa(events: &[SubtitleEvent], video_w: usize, video_h: usize,
     lines.push_str("WrapStyle: 0\nScaledBorderAndShadow: yes\n\n");
     lines.push_str("[V4+ Styles]\n");
     lines.push_str("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n");
+    let style_name = if st.no_default_style { "esrxpExtracted" } else { "Default" };
     lines.push_str(&format!(
-        "Style: Default,Arial,36,{},&H000000FF&,{},&H00000000&,0,0,0,0,100,100,0,0,1,{},{},2,10,10,10,1\n\n",
-        st.primary_color, st.outline_color_ssa, st.outline_width, st.shadow_depth));
+        "Style: {style_name},{},36,{},{},{},{},0,0,0,0,100,100,0,0,1,{},{},2,10,10,10,1\n\n",
+        st.font_name, st.primary_color, st.secondary_color,
+        st.outline_color_ssa, st.shadow_color, st.outline_width, st.shadow_depth));
     lines.push_str("[Events]\n");
     lines.push_str("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n");
     for ev in events {
         let (start, end) = shift(ev, st.time_shift_10ms);
         let (bx, by, _bw, _bh) = ev.bbox;
         let (ox, oy) = ev.roi_origin;
-        let drawing = mask_to_polygon(&ev.mask, ev.image_w, ev.image_h);
+        let eps = if cfg.rip.better_quality { 0.5 } else { 1.2 };
+        let drawing = mask_to_polygon(&ev.mask, ev.image_w, ev.image_h, eps);
         let text = if drawing.is_empty() {
             " ".to_string()
         } else {
             format!("{{\\an7}}{{\\pos({},{})}}{}", ox + bx, oy + by, drawing)
         };
         lines.push_str(&format!(
-            "Dialogue: 0,{}, {},Default,,0,0,0,,{}\n",
-            ass_time(start), ass_time(end), text));
+            "Dialogue: 0,{}, {},{},,0,0,0,,{}\n",
+            ass_time(start), ass_time(end), style_name, text));
     }
     fs::write(out, lines)?;
     Ok(())
 }
 
 /// mask → SSA 矢量绘图命令（外轮廓 + RDP 简化）。
-pub fn mask_to_polygon(mask: &[u8], w: usize, h: usize) -> String {
+/// `eps` 为 RDP 简化阈值：越小保留细节越多（Better Quality 时用 0.5）。
+pub fn mask_to_polygon(mask: &[u8], w: usize, h: usize, eps: f64) -> String {
     let contours = trace_contours(mask, w, h);
     let mut parts: Vec<String> = Vec::new();
     for c in contours {
         if c.len() < 3 {
             continue;
         }
-        let poly = rdp(&c, 1.2);
+        let poly = rdp(&c, eps);
         if poly.len() < 3 {
             continue;
         }

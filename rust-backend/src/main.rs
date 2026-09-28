@@ -147,6 +147,11 @@ fn cmd_rip(args: &[String]) -> Result<()> {
         outputs::write_json_timeline(&res.events, vinfo, &cfg, &p)?;
         artifacts.insert("timeline", p);
     }
+    if !res.events.is_empty() && cfg.output.srt {
+        let p = out_dir.join(format!("{src}.srt"));
+        outputs::write_srt(&res.events, &cfg, &p)?;
+        artifacts.insert("srt", p);
+    }
     let proj = out_dir.join(format!("{src}.esrng.json"));
     outputs::write_project(&res.events, &video, &cfg, &proj, &serde_json::json!(artifacts))?;
     artifacts.insert("project", proj);

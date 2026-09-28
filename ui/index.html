@@ -22,7 +22,11 @@
   .form-grid .field label { font-size:12px; color:#5f6672; display:block; margin-bottom:5px; }
   .meta-tags { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
   .preview-box { display:flex; gap:12px; align-items:flex-start; }
-  .preview-box img { max-width:100%; border-radius:8px; border:1px solid #e5e8ee; background:#000; }
+  .preview-wrap { position:relative; width:100%; display:inline-block; }
+  .preview-wrap img { max-width:100%; border-radius:8px; border:1px solid #e5e8ee; background:#000; display:block; user-select:none; -webkit-user-select:none; }
+  .preview-wrap .sel { position:absolute; border:2px solid #ff4d4f; background:rgba(255,77,79,.12); pointer-events:none; box-shadow:0 0 0 9999px rgba(0,0,0,.25); }
+  .preview-wrap .sel .tip { position:absolute; left:0; top:-20px; background:#ff4d4f; color:#fff; font-size:11px; line-height:18px; padding:0 6px; border-radius:4px; white-space:nowrap; }
+  .preview-wrap .clear-sel { position:absolute; right:6px; bottom:6px; z-index:5; }
   .preview-box .ph { width:100%; height:180px; border-radius:8px; border:1px dashed #d4d9e0; display:flex; align-items:center; justify-content:center; color:#9aa1ac; font-size:13px; background:#fafbfc; }
   .log-box { background:#0f172a; color:#cbd5e1; font-family:"Cascadia Code",Consolas,monospace; font-size:12px; border-radius:8px; padding:12px; height:150px; overflow:auto; white-space:pre-wrap; }
   .progress-row { display:flex; align-items:center; gap:14px; }
@@ -82,6 +86,10 @@
               <t-input-number :value="cfg.rip.diff_threshold" :min="0" :max="255" @change="v=>set('rip.diff_threshold',v)"></t-input-number></div>
             <div class="field"><label>字幕分段 (gap_frames)</label>
               <t-input-number :value="cfg.rip.gap_frames" :min="0" :max="200" @change="v=>set('rip.gap_frames',v)"></t-input-number></div>
+            <div class="field"><label>强制合并相邻字幕</label>
+              <t-switch :value="cfg.rip.force_merge" @change="v=>set('rip.force_merge',v)"></t-switch></div>
+            <div class="field"><label>更高质量轮廓</label>
+              <t-switch :value="cfg.rip.better_quality" @change="v=>set('rip.better_quality',v)"></t-switch></div>
             <div class="field"><label>起始秒</label>
               <t-input-number :value="cfg.start_seconds" :min="0" :step="0.1" @change="v=>set('start_seconds',v)"></t-input-number></div>
             <div class="field"><label>结束秒</label>
@@ -116,6 +124,10 @@
               <input type="color" :value="rgbToHex(cfg.filter.outline_color)" @change="e=>set('filter.outline_color',hexToRgb(e.target.value))" style="width:44px;height:30px;border:none;background:none;cursor:pointer"></div>
             <div class="field"><label>像点补偿 (pixel_compensate)</label>
               <t-input-number :value="cfg.filter.pixel_compensate" :min="0" :max="20" @change="v=>set('filter.pixel_compensate',v)"></t-input-number></div>
+            <div class="field"><label>启用过滤</label>
+              <t-switch :value="cfg.filter.enable_filter" @change="v=>set('filter.enable_filter',v)"></t-switch></div>
+            <div class="field"><label>附加颜色 (附加色,逗号分隔)</label>
+              <t-input :value="additionalColorsText" placeholder="#FF0000,#00FF00" @change="onAdditionalColors"></t-input></div>
           </div>
         </t-tab-panel>
         <t-tab-panel value="post" label="后处理">
@@ -133,9 +145,13 @@
             <t-checkbox :checked="cfg.output.ssa" @change="v=>set('output.ssa',v)">SSA 字幕</t-checkbox>
             <t-checkbox :checked="cfg.output.vobsub" @change="v=>set('output.vobsub',v)">VobSub (.sub/.idx)</t-checkbox>
             <t-checkbox :checked="cfg.output.ocr_png" @change="v=>set('output.ocr_png',v)">OCR 位图</t-checkbox>
+            <t-checkbox :checked="cfg.output.srt" @change="v=>set('output.srt',v)">SRT 时间轴（无文本）</t-checkbox>
             <t-checkbox :checked="cfg.output.json_timeline" @change="v=>set('output.json_timeline',v)">时间轴 JSON</t-checkbox>
             <div class="field"><label>最大字幕宽度</label>
               <t-input-number :value="cfg.output.max_subtitle_width" :min="10" :max="4000" @change="v=>set('output.max_subtitle_width',v)"></t-input-number></div>
+            <div class="field"><label>SSA 字体</label>
+              <t-input :value="cfg.style.font_name" placeholder="Arial" @change="v=>set('style.font_name',v)"></t-input></div>
+            <t-checkbox :checked="cfg.style.no_default_style" @change="v=>set('style.no_default_style',v)">不使用默认样式</t-checkbox>
           </div>
         </t-tab-panel>
       </t-tabs>
@@ -143,16 +159,22 @@
 
     <!-- 3. 预览 -->
     <div class="card">
-      <h2><span class="step">3</span>帧预览 <span style="font-weight:400;color:#8b93a1;font-size:12px">（原图 / 提取 mask / 仅 mask 叠加）</span></h2>
+      <h2><span class="step">3</span>帧预览 <span style="font-weight:400;color:#8b93a1;font-size:12px">（原图 / 提取 mask / 仅 mask 叠加 · 拖动框选字幕区域，不必全屏截图）</span></h2>
       <div class="row" style="margin-bottom:12px;">
         <t-input-number :value="previewFrame" :min="0" :max="maxFrame" @change="v=>previewFrame=v"></t-input-number>
         <t-button theme="primary" variant="outline" @click="doPreview" :loading="previewing">预览</t-button>
         <t-switch v-model="regionOnly" size="small"></t-switch>
         <span style="font-size:12px;color:#5f6672">仅 ROI 区域</span>
+        <t-button v-if="previewUrl" theme="danger" variant="outline" size="small" @click="clearSel">清除选区</t-button>
       </div>
       <div class="preview-box">
-        <img v-if="previewUrl" :src="previewUrl" alt="预览">
-        <div v-else class="ph">打开视频后点击「预览」查看抓取效果</div>
+        <div class="preview-wrap" v-if="previewUrl" ref="pw">
+          <img :src="previewUrl" alt="预览" ref="pimg" draggable="false">
+          <div class="sel" v-if="sel" :style="selStyle">
+            <span class="tip">字幕区域 up={{cfg.region.up}} down={{cfg.region.down}} left={{cfg.region.left}} right={{cfg.region.right}}</span>
+          </div>
+        </div>
+        <div v-else class="ph">打开视频后点击「预览」，在图上拖动框选字幕区域（OCR 截图将只裁剪该区域）</div>
       </div>
     </div>
 
@@ -230,13 +252,17 @@ const app = createApp({
       decoderBackend: '',
       hasElectron: !!(window.esrxp && window.esrxp.selectVideo),
       cfg: {
-        rip: { frame_skip: 1, pixel_difference: 20, ignore_change_percent: 0.5, diff_threshold: 24, gap_frames: 5 },
+        rip: { frame_skip: 1, pixel_difference: 20, ignore_change_percent: 0.5, diff_threshold: 24, gap_frames: 5, force_merge: false, better_quality: false },
         region: { up: 0, down: 0, left: 0, right: 0, scale: 1.0, sharpen: false },
-        filter: { method: 'color_outline', subtitle_color: [255,255,255], outline_color: [0,0,0], pixel_compensate: 1 },
+        filter: { method: 'color_outline', subtitle_color: [255,255,255], outline_color: [0,0,0], pixel_compensate: 1, enable_filter: true, additional_colors: [] },
         postprocess: { single_dot: true, single_line: true, large_block: 0, touch_edge: false, pass_center: true, center_tolerance: 0.12 },
-        output: { ssa: true, vobsub: true, ocr_png: true, json_timeline: true, max_subtitle_width: 720 },
+        output: { ssa: true, vobsub: true, ocr_png: true, srt: true, json_timeline: true, max_subtitle_width: 720 },
+        style: { font_name: 'Arial', no_default_style: false },
         start_seconds: 0, end_seconds: 0, verbose: false,
       },
+      sel: null,
+      selDragging: false,
+      selStart: null,
     };
   },
   computed: {
@@ -244,6 +270,13 @@ const app = createApp({
       if (!this.job || !this.job.progress) return 0;
       const p = this.job.progress;
       return p.total > 0 ? Math.round(p.done / p.total * 100) : 0;
+    },
+    selStyle() {
+      if (!this.sel) return {};
+      return { left: this.sel.x + 'px', top: this.sel.y + 'px', width: this.sel.w + 'px', height: this.sel.h + 'px' };
+    },
+    additionalColorsText() {
+      return (this.cfg.filter.additional_colors || []).map(c => this.rgbToHex(c)).join(',');
     },
   },
   methods: {
@@ -257,6 +290,81 @@ const app = createApp({
     hexToRgb(hex) {
       const n = parseInt(hex.slice(1), 16);
       return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    },
+    onAdditionalColors(v) {
+      const arr = [];
+      for (const part of String(v || '').split(',')) {
+        const t = part.trim();
+        if (/^#[0-9a-fA-F]{6}$/.test(t)) arr.push(this.hexToRgb(t));
+      }
+      this.set('filter.additional_colors', arr);
+    },
+    // ---- 选区（拖动框选字幕区域，OCR 截图只裁剪该区域） ----
+    onSelDown(e) {
+      if (!this.$refs.pimg || !this.$refs.pw) return;
+      const img = this.$refs.pimg;
+      const rect = img.getBoundingClientRect();
+      // 只允许在第一栏（原图）框选
+      const px = e.clientX - rect.left;
+      const py = e.clientY - rect.top;
+      if (px < 0 || px > rect.width / 3 || py < 0 || py > rect.height) return;
+      this.selDragging = true;
+      this.selStart = { x: px, y: py, rectW: rect.width, rectH: rect.height };
+      this.sel = { x: px, y: py, w: 0, h: 0 };
+      e.preventDefault();
+    },
+    onSelMove(e) {
+      if (!this.selDragging || !this.selStart) return;
+      const img = this.$refs.pimg;
+      const rect = img.getBoundingClientRect();
+      let x2 = e.clientX - rect.left;
+      let y2 = e.clientY - rect.top;
+      x2 = Math.max(0, Math.min(x2, rect.width / 3));
+      y2 = Math.max(0, Math.min(y2, rect.height));
+      const x1 = this.selStart.x, y1 = this.selStart.y;
+      const x = Math.min(x1, x2), y = Math.min(y1, y2);
+      this.sel = { x, y, w: Math.abs(x2 - x1), h: Math.abs(y2 - y1) };
+    },
+    onSelUp() {
+      if (!this.selDragging) return;
+      this.selDragging = false;
+      if (!this.sel || this.sel.w < 4 || this.sel.h < 4) { this.sel = null; return; }
+      // 换算到视频原始坐标（第一栏为原图）
+      const W = this.vinfo.width, H = this.vinfo.height;
+      const scaleX = W / (this.selStart.rectW / 3);
+      const scaleY = H / this.selStart.rectH;
+      const vx1 = Math.round(this.sel.x * scaleX);
+      const vy1 = Math.round(this.sel.y * scaleY);
+      const vx2 = Math.round((this.sel.x + this.sel.w) * scaleX);
+      const vy2 = Math.round((this.sel.y + this.sel.h) * scaleY);
+      this.set('region.left', vx1);
+      this.set('region.right', W - vx2);
+      this.set('region.up', vy1);
+      this.set('region.down', H - vy2);
+      this.$message.success('字幕区域已设置：up=' + this.cfg.region.up + ' down=' + this.cfg.region.down + ' left=' + this.cfg.region.left + ' right=' + this.cfg.region.right);
+    },
+    clearSel() {
+      this.sel = null;
+      this.set('region.up', 0); this.set('region.down', 0);
+      this.set('region.left', 0); this.set('region.right', 0);
+      this.$message.success('已清除选区（恢复全屏）');
+    },
+    syncSelFromRegion() {
+      // 视频打开/预览后，若已有 region 配置则显示对应选框
+      const W = this.vinfo && this.vinfo.width, H = this.vinfo && this.vinfo.height;
+      const r = this.cfg.region;
+      if (!W || !H) return;
+      const img = this.$refs.pimg;
+      if (!img) return;
+      const rect = img.getBoundingClientRect();
+      const scaleX = (rect.width / 3) / W;
+      const scaleY = rect.height / H;
+      const x1 = r.left * scaleX, y1 = r.up * scaleY;
+      const x2 = (W - r.right) * scaleX, y2 = (H - r.down) * scaleY;
+      if (x2 - x1 >= 4 && y2 - y1 >= 4) {
+        this.selStart = { x: x1, y: y1, rectW: rect.width, rectH: rect.height };
+        this.sel = { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
+      }
     },
     onPathInput(v) { this.videoPath = v; },
     async api(path, body) {
@@ -292,6 +400,7 @@ const app = createApp({
         });
         if (r.image) this.previewUrl = r.image;
         else if (r.blob) this.previewUrl = URL.createObjectURL(r.blob);
+        this.$nextTick(() => this.syncSelFromRegion());
       } catch (e) { this.$message.error(e.message); }
       this.previewing = false;
     },
@@ -327,7 +436,7 @@ const app = createApp({
             this.artifacts = Object.entries(arts).map(([k, path]) => {
               if (k === 'ocr_images') return { kind: 'png', name: k, path };
               if (typeof path !== 'string') return null;
-              const kindMap = { ass: 'ass', sub: 'sub', idx: 'idx', timeline: 'json', project: 'json' };
+              const kindMap = { ass: 'ass', sub: 'sub', idx: 'idx', srt: 'srt', timeline: 'json', project: 'json' };
               return { kind: kindMap[k] || 'file', name: k, path };
             }).filter(Boolean);
             this.subtitleEvents = j.result.events || [];
@@ -345,6 +454,14 @@ const app = createApp({
       const info = await this.api('/api/info');
       document.getElementById('apiInfo').textContent = '后端 ' + info.version;
     } catch (e) { document.getElementById('apiInfo').textContent = '后端未连接'; }
+    // 预览区选区拖拽（pointer 事件，兼容鼠标/触摸；window 级委托避免 v-if 挂载时机问题）
+    this.$nextTick(() => {
+      window.addEventListener('pointerdown', (e) => {
+        if (e.target && e.target.closest && e.target.closest('.preview-wrap')) this.onSelDown(e);
+      });
+      window.addEventListener('pointermove', (e) => this.onSelMove(e));
+      window.addEventListener('pointerup', () => this.onSelUp());
+    });
   },
 });
 app.use(TDesign);

@@ -10,12 +10,14 @@ pub struct RipConfig {
     pub ignore_change_percent: f64,// 忽略改变 %：变化占比下限
     pub diff_threshold: i64,       // 单像素变化判定阈值
     pub gap_frames: i64,           // 字幕分段帧数
+    pub force_merge: bool,         // 强制合并（字幕管理器 Force Merge：相邻同区字幕强制并为一条）
+    pub better_quality: bool,      // 更高质量（Better Quality：SSA 轮廓保留更多细节）
 }
 
 impl Default for RipConfig {
     fn default() -> Self {
         Self { frame_skip: 1, pixel_difference: 20, ignore_change_percent: 0.5,
-               diff_threshold: 24, gap_frames: 5 }
+               diff_threshold: 24, gap_frames: 5, force_merge: false, better_quality: false }
     }
 }
 
@@ -73,6 +75,8 @@ pub struct FilterConfig {
     pub subtitle_color: (u8, u8, u8),
     pub outline_color: (u8, u8, u8),
     pub pixel_compensate: i64,       // 像点补偿（膨胀次数）
+    pub enable_filter: bool,         // Enable Filter：关掉时仅保留主色过滤
+    pub additional_colors: Vec<(u8, u8, u8)>, // Additional Color：附加颜色（自动生成额外颜色段）
     pub segments: std::collections::BTreeMap<String, ColorSegment>,
 }
 
@@ -90,7 +94,8 @@ impl Default for FilterConfig {
         segs.insert("pass1".into(), pass1);
         segs.insert("final".into(), final_seg);
         Self { method: "color_outline".into(), subtitle_color: (255, 255, 255),
-               outline_color: (0, 0, 0), pixel_compensate: 1, segments: segs }
+               outline_color: (0, 0, 0), pixel_compensate: 1, enable_filter: true,
+               additional_colors: vec![], segments: segs }
     }
 }
 
@@ -120,13 +125,19 @@ pub struct StyleConfig {
     pub outline_width: i64,
     pub shadow_depth: i64,
     pub primary_color: String,
+    pub secondary_color: String,   // Subtitle Style: Secondary
     pub outline_color_ssa: String,
+    pub shadow_color: String,      // Subtitle Style: Shadow
+    pub font_name: String,         // Select Font
+    pub no_default_style: bool,    // No Default Subtitle Style
 }
 
 impl Default for StyleConfig {
     fn default() -> Self {
         Self { unicode: true, time_shift_10ms: 0, outline_width: 1, shadow_depth: 0,
-               primary_color: "&H00FFFFFF&".into(), outline_color_ssa: "&H00000000&".into() }
+               primary_color: "&H00FFFFFF&".into(), secondary_color: "&H000000FF&".into(),
+               outline_color_ssa: "&H00000000&".into(), shadow_color: "&H00000000&".into(),
+               font_name: "Arial".into(), no_default_style: false }
     }
 }
 
@@ -144,6 +155,7 @@ pub struct OutputConfig {
     pub ssa: bool,
     pub vobsub: bool,
     pub ocr_png: bool,
+    pub srt: bool,                 // SRT：纯时间轴（不含文本，定位字幕图片出现区间）
     pub json_timeline: bool,
     pub ocr: OcrConfig,
     pub max_subtitle_width: i64,
@@ -152,7 +164,7 @@ pub struct OutputConfig {
 
 impl Default for OutputConfig {
     fn default() -> Self {
-        Self { ssa: true, vobsub: true, ocr_png: true, json_timeline: true,
+        Self { ssa: true, vobsub: true, ocr_png: true, srt: true, json_timeline: true,
                ocr: OcrConfig { per_image: 1, scale: 1.0, divid_into_2_lines: false },
                max_subtitle_width: 720, fps: None }
     }

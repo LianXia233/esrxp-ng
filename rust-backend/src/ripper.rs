@@ -283,7 +283,7 @@ where
     })?;
 
     let events = segment(&candidates, fps, rcfg.gap_frames);
-    let events = merge_repeat(events, fps, false);
+    let events = merge_repeat(events, fps, cfg.rip.force_merge);
 
     let res = RipResult {
         events,

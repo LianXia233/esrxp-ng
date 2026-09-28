@@ -95,11 +95,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install FFmpeg dev + libclang
+      - name: Install vendored-FFmpeg build deps（静态链接，用户零依赖）
         run: |
           sudo apt-get update
-          sudo apt-get install -y libavformat-dev libavcodec-dev libavutil-dev libswscale-dev \
-            libavfilter-dev libswresample-dev libavdevice-dev libclang-dev pkg-config
+          sudo apt-get install -y nasm yasm make clang libclang-dev pkg-config
 
       - name: Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -120,9 +119,11 @@ jobs:
             rust-backend/target
           key: deb-cargo-${{ hashFiles('rust-backend/Cargo.lock') }}
 
-      - name: Build backend (release)
+      - name: Build backend (release, 静态链接 FFmpeg)
         working-directory: rust-backend
-        run: cargo build --release
+        run: |
+          export LIBCLANG_PATH=/usr/lib/llvm-14/lib
+          cargo build --release --features vendored-ffmpeg
 
       - name: Install electron deps
         working-directory: electron

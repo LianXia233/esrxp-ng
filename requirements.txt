@@ -1,6 +1,0 @@
-# esrxp-ng 依赖（Win11 一键安装：pip install -r requirements.txt）
-# PyAV 的 wheel 自带 FFmpeg 动态库，Windows 无需单独安装 FFmpeg
-av>=12.0,<19
-numpy>=1.24
-opencv-python>=4.8
-typer>=0.9

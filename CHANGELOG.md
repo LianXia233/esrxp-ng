@@ -2,6 +2,24 @@
 
 本项目语义化版本号（SemVer）。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.1.1] - 2026-09-29
+
+### 新增
+- **SRT 时间轴导出**：仅保留字幕图片所在时间轴（无文本），作为位图字幕的时间索引，配合 OCR 位图/SSA 使用
+- **OCR 字幕截图手动选区**：预览图直接拖拽框选字幕区域（不必全屏截图），OCR 位图按所选区域裁剪；区域参数与选区双向联动
+- **强制合并相邻字幕**（字幕管理器 Force Merge）：同区相邻字幕强制并为一条
+- **更高质量轮廓**（Better Quality）：SSA 矢量轮廓 RDP 阈值收紧，保留更多字形细节
+- **附加颜色**（Additional Color）：支持多组附加颜色段联合过滤
+- **启用过滤开关**（Enable Filter）、SSA 字体选择、SSA 非默认样式名
+- **Debian 静态链接**：FFmpeg 源码编译并静态链入单二进制，用户安装零依赖（无需安装 FFmpeg）
+
+### 修复
+- Windows 编译链路：改用 mingw-w64 GNU + BtbN FFmpeg 4.4（MSVC cl -I 解析问题、FFmpeg 9.0.2 头不匹配）
+- Debian 编译链路：改用 ubuntu-22.04 + electron-builder homepage 配置
+- Electron 打包：server/ui 目录 asarUnpack 解包，Rust 后端与 FFmpeg 运行时从真实路径加载
+
+### 其他
+- 移除 Python 参考实现（esrxp_ng/），功能全部由 Rust 实现
 ## [0.1.0] - 2026-09-29
 
 **初始发布** —— esrXP（Delphi 5 硬字幕提取工具）现代化重构。

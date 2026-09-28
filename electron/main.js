@@ -8,11 +8,18 @@ const fs = require('fs');
 const PORT = 18080;
 const HOST = '127.0.0.1';
 
+// 打包态（asar）下 server / ui 被 asarUnpack 解到 resources/app.asar.unpacked，
+// Rust 后端无法从 asar 内 spawn/读取，必须用 unpacked 真实路径。
+const unpackedBase = app.isPackaged
+  ? path.join(process.resourcesPath, 'app.asar.unpacked')
+  : __dirname;
+
 // 后端二进制：优先环境变量 ESRXP_SERVER，其次与 main.js 同级的 server 可执行文件，
 // 最后回退到 rust-backend/target 下的调试构建（开发态）。
 function resolveServer() {
   const candidates = [
     process.env.ESRXP_SERVER,
+    path.join(unpackedBase, 'server', process.platform === 'win32' ? 'esrxp-ng-server.exe' : 'esrxp-ng-server'),
     path.join(__dirname, 'server', process.platform === 'win32' ? 'esrxp-ng-server.exe' : 'esrxp-ng-server'),
     path.join(__dirname, '..', 'rust-backend', 'target', 'release', process.platform === 'win32' ? 'esrxp-ng-server.exe' : 'esrxp-ng-server'),
     path.join(__dirname, '..', 'rust-backend', 'target', 'debug', process.platform === 'win32' ? 'esrxp-ng-server.exe' : 'esrxp-ng-server'),
@@ -32,7 +39,9 @@ function startBackend() {
     console.error('未找到 esrxp-ng-server 可执行文件，请先构建 Rust 后端或设置 ESRXP_SERVER');
     return false;
   }
-  const uiDir = path.join(__dirname, '..', 'ui');
+  const uiDir = app.isPackaged
+    ? path.join(process.resourcesPath, 'app.asar.unpacked', 'ui')
+    : path.join(__dirname, '..', 'ui');
   const cacheDir = path.join(app.getPath('userData'), 'cache');
   fs.mkdirSync(cacheDir, { recursive: true });
   backend = spawn(bin, ['serve', '--host', HOST, '--port', String(PORT), '--ui', uiDir, '--cache', cacheDir], {

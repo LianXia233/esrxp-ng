@@ -6,7 +6,8 @@
 - **GPU 优先**：解码层自动探测 CUDA NVDEC（Windows D3D11VA / Linux VAAPI），失败自动回退 CPU；像素过滤/帧差/缩放内核有 CUDA PTX 与纯 Rust 双实现，运行时按硬件选择
 - **TDesign UI**：Vue 3 + TDesign v1.10.5（本地 vendor，无构建链，开箱即用）
 - **Electron 外壳**：Win11 目标，electron-builder 出 NSIS 安装包 / 便携版
-- **输出**：VobSub（.sub/.idx，4-bit RLE）、SSA（矢量轮廓）、OCR 位图（PNG）、时间轴 JSON、工程 JSON
+- **输出**：VobSub（.sub/.idx，4-bit RLE）、SSA（矢量轮廓）、OCR 位图（PNG，按字幕选区裁剪）、SRT 时间轴（无文本）、时间轴 JSON、工程 JSON
+- **零运行时依赖**：Debian 版将 FFmpeg 源码编译并静态链入单二进制；Windows 版 FFmpeg 运行时 DLL 随安装包分发，均无需用户另行安装 FFmpeg/Python
 
 ## 目录结构
 
@@ -24,10 +25,9 @@ esrxp-ng/
 │   │   ├── api.rs           # axum：open/preview/rip/job/artifact + 静态托管
 │   │   └── main.rs          # CLI：rip / serve / dump-config / dbg
 │   └── Cargo.toml
-├── ui/                      # TDesign Vue3 单页（index.html + vendor/）
-├── electron/                # Electron 外壳（main/preload/package.json/smoke.js）
-├── esrxp_ng/                # Python 参考实现（PyAV+OpenCV，验证基准）
-├── tests/                   # 端到端验证产物（out=Python、rust_out=Rust）
+├── ui/                      # TDesign Vue3 单页（index.html + vendor/，OCR 选区拖拽）
+├── electron/                # Electron 外壳（main/preload/package.json/smoke.js，asarUnpack 解包）
+├── tests/                   # 端到端验证产物（rust_out=Rust、out=历史基线）
 ├── sample_hardsub.mp4       # 测试视频（3 条字幕，真值 0.5–1.5 / 2.0–3.0 / 3.5–5.0）
 └── scripts/make_sample_video.py
 ```
@@ -38,6 +38,8 @@ esrxp-ng/
 
 ```bash
 # 依赖（Ubuntu/Debian，可换 mirrors.bfsu.edu.cn）
+# 动态链接模式（开发验证）：需系统 FFmpeg dev 包
+# 静态链接模式（发布，零依赖）：cargo build --release --features vendored-ffmpeg
 apt install -y libavformat-dev libavcodec-dev libavutil-dev libswscale-dev \
     libavfilter-dev libswresample-dev libavdevice-dev libclang-14-dev pkg-config
 

@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 use tower_http::services::ServeDir;
 
 use crate::config::AppConfig;
-use crate::outputs::{write_json_timeline, write_ocr_png, write_project, write_ssa, write_vobsub};
+use crate::outputs::{write_json_timeline, write_ocr_png, write_project, write_srt, write_ssa, write_vobsub};
 use crate::ripper::rip;
 use crate::video::VideoSource;
 
@@ -268,6 +268,11 @@ async fn api_rip(State(st): State<AppState>, Json(req): Json<RipReq>) -> Respons
                     .map_err(|e| e.to_string())?;
                 artifacts.insert("ocr_images".into(), out_dir.join("subtitle_imgs").display().to_string());
                 let _ = files;
+            }
+            if !res.events.is_empty() && cfg.output.srt {
+                let p = out_dir.join(format!("{src}.srt"));
+                write_srt(&res.events, &cfg, &p).map_err(|e| e.to_string())?;
+                artifacts.insert("srt".into(), p.display().to_string());
             }
             if cfg.output.json_timeline {
                 let p = out_dir.join(format!("{src}.timeline.json"));
