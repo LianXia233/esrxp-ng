@@ -36,10 +36,10 @@ jobs:
         shell: bash
         run: rustup target add x86_64-pc-windows-gnu
 
-      - name: Download FFmpeg dev package (BtbN n8.1 shared, 匹配 ffmpeg-next 7.x)
+      - name: Download FFmpeg dev package (BtbN n9.0 shared, 匹配 ffmpeg-next 9.x)
         shell: bash
         run: |
-          curl -L -o /tmp/ff.zip https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip
+          curl -L -o /tmp/ff.zip https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-shared-9.0.zip
           mkdir -p /c/ffmpeg
           cp /tmp/ff.zip /c/ffmpeg/ff.zip
           powershell -Command "Expand-Archive -Path 'C:\ffmpeg\ff.zip' -DestinationPath 'C:\ffmpeg' -Force"

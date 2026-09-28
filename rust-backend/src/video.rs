@@ -58,7 +58,9 @@ impl DecodeBackend {
         let v = match self {
             Self::Cuda => AV_PIX_FMT_CUDA as u32,
             Self::D3D11Va => AV_PIX_FMT_D3D11VA_VLD as u32,
-            Self::Vaapi => AV_PIX_FMT_VAAPI_VLD as u32,
+            // AV_PIX_FMT_NONE：让 av_hwframe_ctx_init 自动选择 VAAPI 输出格式，
+            // 兼容 FFmpeg 5.0（vaapi_vld）与 5.1+/8.x/9.x（vaapi）枚举名差异
+            Self::Vaapi => AV_PIX_FMT_NONE as u32,
             Self::Cpu => AV_PIX_FMT_YUV420P as u32,
         };
         unsafe { std::mem::transmute::<u32, ffi::AVPixelFormat>(v) }
@@ -90,10 +92,10 @@ impl VideoSource {
             .ok_or_else(|| anyhow::anyhow!("没有视频流"))?;
         let index = stream.index();
         // 元数据：直接读 codec context ffi 字段（Parameters 薄封装无宽高）
-        let ctx = stream.codec();
+        let par = stream.parameters();
         let (width, height, pix_fmt_id) = unsafe {
-            let p = ctx.as_ptr();
-            ((*p).width as usize, (*p).height as usize, (*p).pix_fmt as i32)
+            let p = par.as_ptr();
+            ((*p).width as usize, (*p).height as usize, (*p).format as i32)
         };
         let tb = stream.time_base();
         let time_base = if tb.denominator() > 0 {
@@ -124,7 +126,7 @@ impl VideoSource {
         } else {
             0
         };
-        let codec_name = ctx.id().name().to_string();
+        let codec_name = par.id().name().to_string();
         let pix_enum: ffi::AVPixelFormat = unsafe { std::mem::transmute::<i32, ffi::AVPixelFormat>(pix_fmt_id) };
         let pix_fmt = Pixel::from(pix_enum)
             .descriptor()
@@ -207,7 +209,9 @@ impl VideoSource {
         let stream_index = self.stream_index;
         let stream = self.input.streams().best(Type::Video)
             .ok_or_else(|| anyhow::anyhow!("no video"))?;
-        let mut decoder = stream.codec().decoder().video()?;
+        let mut decoder = ffmpeg_next::codec::context::Context::from_parameters(stream.parameters())?
+            .decoder()
+            .video()?;
         let mut scaler = ScaleCtx::get(
             decoder.format(),
             decoder.width(),
