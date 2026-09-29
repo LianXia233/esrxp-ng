@@ -112,12 +112,16 @@ pub fn cmd_rip(args: &[String]) -> Result<()> {
     let mut vs = video::VideoSource::open(&video)?;
     println!("视频: {}x{} @ {:.2} fps, {:.2}s, {} 帧",
              vs.width, vs.height, vs.fps, vs.duration, vs.frame_count);
+    logging::info(format!("视频: {}x{} @ {:.2} fps, {:.2}s, {} 帧",
+                          vs.width, vs.height, vs.fps, vs.duration, vs.frame_count));
     let res = ripper::rip(&mut vs, &cfg, Some(|done, total, found| {
         eprint!("\r  处理帧 {done}/{total}  候选 {found}");
     }))?;
     eprintln!();
     println!("完成：处理 {} 帧，变化帧 {}，字幕 {} 条，耗时 {:.2}s",
              res.frames_processed, res.candidates, res.events.len(), res.elapsed_s);
+    logging::info(format!("抓取完成：处理 {} 帧，变化帧 {}，字幕 {} 条，耗时 {:.2}s",
+                          res.frames_processed, res.candidates, res.events.len(), res.elapsed_s));
 
     let out_dir = PathBuf::from(&out);
     std::fs::create_dir_all(&out_dir)?;
