@@ -1,6 +1,6 @@
 [package]
 name = "esrxp-ng-server"
-version = "0.4.2"
+version = "0.4.3"
 edition = "2021"
 description = "esrxp-ng Rust 后端：FFmpeg 解码 + 硬字幕抓取引擎 + axum HTTP API（TDesign/Electron UI 后端）"
 

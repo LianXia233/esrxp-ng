@@ -227,6 +227,7 @@ impl VideoSource {
             Flags::BILINEAR,
         )?;
         let mut counter: i64 = -1;
+        let mut first_frame = true;
         let mut packets = self.input.packets();
         'outer: while let Some((s, packet)) = packets.next() {
             if s.index() != stream_index {
@@ -238,7 +239,14 @@ impl VideoSource {
                 match decoder.receive_frame(&mut f) {
                     Ok(()) => {
                         counter += 1;
-                        let idx = frame_index(&f, counter, self.time_base, self.fps);
+                        let mut idx = frame_index(&f, counter, self.time_base, self.fps);
+                        // 首帧锚定：录屏等来源的首帧 pts 常有偏移（如 0.02s），
+                        // pts 换算会把请求区间起点跳过（idx > start 且此前无任何产出），
+                        // 造成 start=0 时「帧不存在」。将本段解码的第一帧锚定到区间起点。
+                        if first_frame && idx > start {
+                            idx = start;
+                        }
+                        first_frame = false;
                         if idx < start {
                             continue;
                         }
@@ -360,6 +368,7 @@ impl VideoSource {
         let mut result = Ok(true);
         let mut packets = self.input.packets();
         let mut counter: i64 = -1;
+        let mut first_frame = true;
         'outer: while let Some((s, packet)) = packets.next() {
             if s.index() != self.stream_index {
                 continue;
@@ -389,7 +398,12 @@ impl VideoSource {
                     break;
                 }
                 counter += 1;
-                let idx = frame_index(&hw_frame, counter, self.time_base, self.fps);
+                let mut idx = frame_index(&hw_frame, counter, self.time_base, self.fps);
+                // 首帧锚定，语义与 decode_sw 一致
+                if first_frame && idx > start {
+                    idx = start;
+                }
+                first_frame = false;
                 if idx < start {
                     continue;
                 }
