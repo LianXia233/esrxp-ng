@@ -2,6 +2,20 @@
 
 本项目语义化版本号（SemVer）。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.3.2] - 2026-09-29
+
+**修复 Windows 启动白屏根因** —— UI 资产未进包，恢复 GPU 硬件加速。
+
+### 修复
+- **UI 资产未打包（白屏根因）**：`build.files` 中的 `../ui/**/*` 被 electron-builder 静默忽略（files glob 不允许跳出应用目录），打包含 0.3.0/0.3.1 的客户端后端静态托管目录为空，`GET /` 返回 404 空响应体，Electron 渲染空白页即白屏。改为 `extraResources` 复制 ui 到 `resources/ui`，`resolveUiDir` 优先读取并写入启动日志
+- **恢复 GPU 硬件加速**：撤销 0.3.1 的全局 `app.disableHardwareAcceleration()`；个别环境渲染异常可用 `--disable-gpu` 启动参数兜底
+- 清理 main.js 中 0.3.1 遗留的死代码（`unpackedBase`）与过时注释
+- 修正 CHANGELOG 中重复的 0.3.0 标题
+
+### 说明
+- 0.3.1 的防御措施全部保留：端口占用自动规避（18081-18085）、`/api/info` 版本校验、`userData/startup.log` 启动日志、渲染进程崩溃与加载失败兜底
+- 验证方法：安装后 `curl --noproxy "*" http://127.0.0.1:18080/api/info` 应返回版本 JSON；`GET /` 应返回 index.html
+
 ## [0.3.1] - 2026-09-29
 
 **修复 Windows 启动白屏** —— 全面防御 + 可诊断。
@@ -13,7 +27,6 @@
 - **加载兜底**：渲染进程崩溃或页面加载失败时弹出明确错误框 + 错误页，不再无声白屏
 - **窗口优化**：ready-to-show 后再显示窗口，消除启动白屏闪烁
 
-## [0.3.0] - 2026-09-29
 ## [0.3.0] - 2026-09-29
 
 **补齐最后一处未对齐** —— 字幕管理器时间轴编辑（esrXP Subtitle Manager 手动编辑时间轴）。

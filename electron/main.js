@@ -5,19 +5,11 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
-// ---- 白屏防御 1：禁用 GPU 硬件加速 ----
-// Win11 虚拟机 / RDP / 老旧或无显卡驱动环境，Electron GPU 加速会渲染白屏。
-// 硬字幕提取是 CPU 密集任务，软件渲染开销可接受，换来各环境稳定显示。
-app.disableHardwareAcceleration();
+// GPU 硬件加速保持启用（0.3.1 曾全局禁用，0.3.2 撤销）；个别环境若渲染异常，
+// 用户可自行以 --disable-gpu 启动参数兜底，不再影响全部环境。
 
 const PORT_BASE = 18080;
 const HOST = '127.0.0.1';
-
-// 打包态（asar）下 server / ui 被 asarUnpack 解到 resources/app.asar.unpacked，
-// Rust 后端无法从 asar 内 spawn/读取，必须用 unpacked 真实路径。
-const unpackedBase = app.isPackaged
-  ? path.join(process.resourcesPath, 'app.asar.unpacked')
-  : __dirname;
 
 // 启动日志：写 userData/startup.log，白屏/启动失败时用户可据此反馈
 function log(...args) {
@@ -54,14 +46,19 @@ let chosenPort = PORT_BASE;
 
 function resolveUiDir() {
   if (app.isPackaged) {
-    const unpacked = path.join(process.resourcesPath, 'app.asar.unpacked', 'ui');
-    if (fs.existsSync(unpacked)) return unpacked;
-    return path.join(process.resourcesPath, 'ui'); // extraResources 若配置 ui 时兜底
+    const extra = path.join(process.resourcesPath, 'ui');                  // extraResources 输出（0.3.2 起）
+    if (fs.existsSync(extra)) { log('UI 目录: ' + extra); return extra; }
+    const unpacked = path.join(process.resourcesPath, 'app.asar.unpacked', 'ui'); // asarUnpack 兜底
+    if (fs.existsSync(unpacked)) { log('UI 目录: ' + unpacked); return unpacked; }
+    log('警告: 打包态未找到 UI 资源目录，页面将为 404 空白（检查 electron-builder extraResources 配置）');
+    return extra;
   }
-  return path.join(__dirname, '..', 'ui');
+  const dev = path.join(__dirname, '..', 'ui');
+  log('UI 目录(开发态): ' + dev);
+  return dev;
 }
 
-// ---- 白屏防御 2：后端启动（含端口占用自动规避）----
+// ---- 后端启动（含端口占用自动规避，白屏防御保留）----
 function startBackend(candidates) {
   const bin = resolveServer();
   if (!bin) {
@@ -116,7 +113,7 @@ function showFatal(title, body) {
   app.exit(1);
 }
 
-// ---- 白屏防御 3：窗口与加载兜底 ----
+// ---- 窗口与加载兜底（白屏防御保留）----
 function createWindow() {
   mainWin = new BrowserWindow({
     width: 1280,
