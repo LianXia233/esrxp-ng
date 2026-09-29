@@ -437,6 +437,10 @@ fn make_event(frames: &[Candidate], fps: f64,
 }
 
 fn merge_repeat(events: Vec<SubtitleEvent>, fps: f64, force: bool) -> Vec<SubtitleEvent> {
+    merge_repeat_with(events, force, 0.9, 2.0 / fps)
+}
+
+fn merge_repeat_with(events: Vec<SubtitleEvent>, force: bool, iou_threshold: f64, max_gap_time: f64) -> Vec<SubtitleEvent> {
     if events.is_empty() {
         return events;
     }
@@ -445,7 +449,7 @@ fn merge_repeat(events: Vec<SubtitleEvent>, fps: f64, force: bool) -> Vec<Subtit
         let prev = merged.last_mut().unwrap();
         let iou = mask_iou(&prev.roi_mask, &ev.roi_mask);
         let gap_time = ev.start - prev.end;
-        if force || (iou >= 0.9 && gap_time <= 2.0 / fps) {
+        if force || (iou >= iou_threshold && gap_time <= max_gap_time) {
             prev.end = ev.end;
             prev.end_frame = ev.end_frame;
             prev.diff_frames += ev.diff_frames;
@@ -489,6 +493,14 @@ fn merge_repeat(events: Vec<SubtitleEvent>, fps: f64, force: bool) -> Vec<Subtit
 
 /// 字幕管理器 Crop Subtitle：用当前 filter/后处理参数对某字幕时间段重新抓取，
 /// 产出更干净的 bbox/image/mask（对齐 esrXP Crop 语义）。
+/// 字幕管理器「合并重复」（对齐 esrXP MIMergeRepeat）：对事件列表按 mask 相似度一键合并。
+/// 事件须已按 start 排序；返回 (合并后列表, 被合并掉条数)。
+pub fn merge_repeat_manual(events: Vec<SubtitleEvent>, iou_threshold: f64, max_gap_s: f64) -> (Vec<SubtitleEvent>, usize) {
+    let before = events.len();
+    let merged = merge_repeat_with(events, false, iou_threshold, max_gap_s);
+    (merged, before - merged.len())
+}
+
 pub fn crop_event(video: &mut VideoSource, cfg: &AppConfig, ev: &SubtitleEvent) -> Result<SubtitleEvent> {
     let k: &dyn FrameKernels = kernels();
     let pcfg = cfg.postprocess.clone();

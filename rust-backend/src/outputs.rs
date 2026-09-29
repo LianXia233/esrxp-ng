@@ -675,7 +675,7 @@ fn json_to_ev(s: &serde_json::Value) -> SubtitleEvent {
 
 // 极小 base64（无第三方依赖）
 const B64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-fn base64_encode(data: &[u8]) -> String {
+pub fn base64_encode(data: &[u8]) -> String {
     let mut out = String::new();
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as u32;

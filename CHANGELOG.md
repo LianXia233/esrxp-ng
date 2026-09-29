@@ -2,6 +2,15 @@
 
 本项目语义化版本号（SemVer）。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.4.1] - 2026-09-29
+
+**esrXP 对齐补全** —— Merge Repeat 一键合并 + 管理器位图缩放预览。
+
+### 新增
+- **合并重复（MIMergeRepeat 对齐）**：`POST /api/manager/merge_repeat`，对工程内全部未删除字幕按 mask IoU 相似度一键合并（可调 `iou_threshold` 默认 0.9、`max_gap_s` 默认 0.2 秒），操作后重导出全部产物；管理器工具行新增「合并重复」按钮
+- **管理器位图列与缩放预览（Manager Zoom 对齐）**：manager/list 与各管理器操作响应新增字幕位图（bbox 裁切 RGB24 base64），表格新增位图列（canvas 渲染、事件级缓存），工具行新增 50%-400% 缩放控件（步进 50%）
+- 默认值校准（esrXP 出厂 frame_skip=0 / pixel_difference=80 / ignore_change=80% 与本实现的语义映射）经云服务器样片 A/B 实测后另行调整，避免盲改破坏已验证基线
+
 ## [0.4.0] - 2026-09-29
 
 **去端口化架构** —— Electron 与后端改走进程内管道，彻底消除端口/代理/跨进程失联类故障。

@@ -24,8 +24,8 @@ use serde_json::{json, Value};
 use tower_http::services::ServeDir;
 
 use crate::config::AppConfig;
-use crate::outputs::{load_esr, write_esr, write_json_timeline, write_ocr_png, write_srt, write_srt_bitmap, write_ssa, write_vobsub};
-use crate::ripper::{crop_event, rip, SubtitleEvent};
+use crate::outputs::{base64_encode, load_esr, write_esr, write_json_timeline, write_ocr_png, write_srt, write_srt_bitmap, write_ssa, write_vobsub};
+use crate::ripper::{crop_event, merge_repeat_manual, rip, SubtitleEvent};
 use crate::video::VideoSource;
 
 pub type Jobs = Arc<Mutex<HashMap<String, Job>>>;
@@ -145,6 +145,7 @@ pub fn router(ui_dir: String, cache_dir: String) -> Router {
         .route("/api/manager/shift", post(api_manager_shift))
         .route("/api/manager/split", post(api_manager_split))
         .route("/api/manager/merge", post(api_manager_merge))
+        .route("/api/manager/merge_repeat", post(api_manager_merge_repeat))
         .route("/api/manager/export", post(api_manager_export))
         .route("/api/project/open", post(api_project_open))
         .route("/api/artifact", get(api_artifact))
@@ -637,7 +638,38 @@ fn events_meta(events: &[SubtitleEvent]) -> Vec<Value> {
         "end": (e.end * 100.0).round() / 100.0,
         "start_frame": e.start_frame, "end_frame": e.end_frame,
         "bbox": e.bbox, "diff_frames": e.diff_frames, "deleted": e.deleted,
+        "image_w": e.image_w, "image_h": e.image_h,
+        "image_b64": base64_encode(&e.image),  // bbox 裁切 RGB24（管理器位图预览用）
     })).collect()
+}
+
+#[derive(Deserialize)]
+pub struct MergeRepeatReq {
+    pub project: String,              // .esr 工程路径
+    pub iou_threshold: Option<f64>,   // mask 相似度阈值（默认 0.9）
+    pub max_gap_s: Option<f64>,       // 时间间隔上限（秒，默认 0.2）
+}
+
+/// MIMergeRepeat：一键合并内容重复的连续字幕（仅未删除事件，已删除事件原样保留）。
+async fn api_manager_merge_repeat(Json(req): Json<MergeRepeatReq>) -> Response {
+    let r = load_project_for_manage(&req.project);
+    let (events, filtered, video, cfg, out_dir) = match r {
+        Ok(x) => x,
+        Err(e) => return e,
+    };
+    let iou = req.iou_threshold.unwrap_or(0.9);
+    let gap = req.max_gap_s.unwrap_or(0.2);
+    let mut deleted: Vec<SubtitleEvent> = events.iter().filter(|e| e.deleted).cloned().collect();
+    let alive: Vec<SubtitleEvent> = events.into_iter().filter(|e| !e.deleted).collect();
+    let (mut merged, removed) = merge_repeat_manual(alive, iou, gap);
+    merged.append(&mut deleted);
+    merged.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
+    let (artifacts, proj) = match write_all_outputs(&merged, &filtered, &video, &cfg, Path::new(&out_dir)) {
+        Ok(v) => v,
+        Err(e) => return err_response(&e),
+    };
+    let _ = proj;
+    Json(json!({"count": merged.len(), "merged": removed, "artifacts": artifacts, "subtitles": events_meta(&merged)})).into_response()
 }
 
 async fn api_manager_list(Json(req): Json<ManagerOp>) -> Response {

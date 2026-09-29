@@ -275,6 +275,7 @@
             <t-button theme="outline" size="small" @click="removeSelected">标记删除选中</t-button>
             <t-button theme="outline" size="small" @click="purgeDeleted">清除已删</t-button>
             <t-button theme="outline" size="small" @click="cropSelected">裁剪选中</t-button>
+            <t-button theme="outline" size="small" @click="mergeRepeatAll">合并重复</t-button>
             <t-button theme="primary" size="small" @click="exportManager">重新导出</t-button>
           </div>
           <div class="row" style="gap:8px;margin-top:8px;">
@@ -284,6 +285,10 @@
             <t-input-number :value="splitTime" :min="0" :max="9999" :step="0.1" size="small" style="width:110px" @change="v=>splitTime=v"></t-input-number>
             <t-button theme="outline" size="small" @click="splitSelected">分割选中@秒</t-button>
             <t-button theme="outline" size="small" @click="mergeSelected">合并选中两条</t-button>
+            <span style="font-size:12px;color:#5f6672;align-self:center">位图缩放</span>
+            <t-button size="small" variant="text" @click="setZoom(-0.5)">-</t-button>
+            <span style="font-size:12px;align-self:center;min-width:40px;text-align:center">{{Math.round(mgrZoom*100)}}%</span>
+            <t-button size="small" variant="text" @click="setZoom(0.5)">+</t-button>
             <span style="font-size:12px;color:#5f6672;align-self:center">可直接改表格 start/end（秒）</span>
           </div>
         </div>
@@ -296,10 +301,11 @@
           <t-checkbox :checked="selectAll" @change="v=>toggleSelectAll(v)">全选</t-checkbox>
         </div>
         <table class="artifact-table">
-          <thead><tr><th></th><th>#</th><th>开始</th><th>结束</th><th>时长</th><th>bbox (x,y,w,h)</th><th>变化帧</th><th>状态</th></tr></thead>
+          <thead><tr><th></th><th>位图</th><th>#</th><th>开始</th><th>结束</th><th>时长</th><th>bbox (x,y,w,h)</th><th>变化帧</th><th>状态</th></tr></thead>
           <tbody>
             <tr v-for="e in visibleManagerEvents" :key="e.index" :style="e.deleted?'opacity:.5;text-decoration:line-through':''">
               <td><t-checkbox :checked="e.selected" @change="v=>toggleSelect(e.index,v)"></t-checkbox></td>
+              <td style="max-width:280px;overflow:hidden"><img v-if="e.image_b64" :src="eventImgUrl(e)" :width="imgW(e)" style="image-rendering:pixelated" alt=""><span v-else style="color:#c2c7d0">-</span></td>
               <td>{{e.index}}</td>
               <td><t-input-number :value="e.start" :min="0" :step="0.01" size="small" style="width:92px" @change="v=>editEvent(e.index,v,null)"></t-input-number></td>
               <td><t-input-number :value="e.end" :min="0" :step="0.01" size="small" style="width:92px" @change="v=>editEvent(e.index,null,v)"></t-input-number></td>
@@ -361,6 +367,7 @@ const app = createApp({
       filteredEvents: [],
       managerView: 'hide',
       selectAll: false,
+      mgrZoom: 1,
       managerEvents: [],
       projectOpenPath: '',
       shiftMs: 0,
@@ -605,6 +612,34 @@ const app = createApp({
         this.filteredEvents = [];
         this.$message.success('已恢复被过滤候选，共 ' + r.count + ' 条');
       } catch (e) { this.$message.error(e.message); }
+    },
+    async mergeRepeatAll() {
+      // 对齐 esrXP MIMergeRepeat：一键合并内容重复的连续字幕
+      try {
+        const r = await this.api('/api/manager/merge_repeat', { project: this.projectPath });
+        this.managerEvents = (r.subtitles || []).map(e => ({ ...e, selected: false }));
+        this.$message.success('已合并重复字幕：合并 ' + r.merged + ' 条，保留 ' + r.count + ' 条');
+      } catch (e) { this.$message.error(e.message); }
+    },
+    setZoom(d) { this.mgrZoom = Math.min(4, Math.max(0.5, Math.round((this.mgrZoom + d) * 10) / 10)); },
+    imgW(e) { return Math.max(8, Math.round((e.image_w || 60) * this.mgrZoom)); },
+    eventImgUrl(e) {
+      // 后端给的是 RGB24 裸像素 base64，转 canvas dataURL；结果缓存在事件对象上
+      if (e._imgUrl !== undefined) return e._imgUrl;
+      try {
+        const bin = Uint8Array.from(atob(e.image_b64), c => c.charCodeAt(0));
+        const w = e.image_w, h = e.image_h;
+        if (!w || !h || bin.length < w * h * 3) { e._imgUrl = ''; return ''; }
+        const cv = document.createElement('canvas');
+        cv.width = w; cv.height = h;
+        const rgba = new Uint8ClampedArray(w * h * 4);
+        for (let i = 0, j = 0; i < w * h * 3; i += 3, j += 4) {
+          rgba[j] = bin[i]; rgba[j + 1] = bin[i + 1]; rgba[j + 2] = bin[i + 2]; rgba[j + 3] = 255;
+        }
+        cv.getContext('2d').putImageData(new ImageData(rgba, w, h), 0, 0);
+        e._imgUrl = cv.toDataURL();
+      } catch (_) { e._imgUrl = ''; }
+      return e._imgUrl;
     },
     async removeSelected() {
       const idxs = this.selectedIndexes();
