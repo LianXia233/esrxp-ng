@@ -120,7 +120,7 @@ pub fn cmd_rip(args: &[String]) -> Result<()> {
              vs.width, vs.height, vs.fps, vs.duration, vs.frame_count);
     logging::info(format!("视频: {}x{} @ {:.2} fps, {:.2}s, {} 帧",
                           vs.width, vs.height, vs.fps, vs.duration, vs.frame_count));
-    let res = ripper::rip(&mut vs, &cfg, {
+    let res = ripper::rip(&mut vs, &cfg, Some({
         let mut last_pct: i64 = -1;
         move |done, total, found| {
             let pct = if total > 0 { done * 100 / total } else { 0 };
@@ -130,7 +130,7 @@ pub fn cmd_rip(args: &[String]) -> Result<()> {
             }
             eprint!("\r  处理帧 {done}/{total}  候选 {found}");
         }
-    })?;
+    }))?;
     eprintln!();
     println!("完成：处理 {} 帧，变化帧 {}，字幕 {} 条，耗时 {:.2}s",
              res.frames_processed, res.candidates, res.events.len(), res.elapsed_s);
