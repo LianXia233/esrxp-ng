@@ -465,6 +465,7 @@ pub fn write_ocr_png(events: &[SubtitleEvent], cfg: &AppConfig, out_dir: &Path) 
         }
         let p = out_dir.join(format!("subtitle_{:04}.{ext}", img_idx));
         save_image(&img, &p, &ext, ocr.quality)?;
+        crate::logging::debug(format!("OCR 位图 {}x{} → {}", img.width(), img.height(), p.display()));
         files.push(p.display().to_string());
         i += per_image;
     }
@@ -599,44 +600,90 @@ pub fn render_subtitle_tile(ev: &SubtitleEvent, ocr: &OcrConfig) -> Option<image
     let ss = if ocr.antialias { ocr.supersample.clamp(1, 4) as usize } else { 1usize };
     let step = 1.0 / ss as f64;
     let inv = step * step;
-    let mut out = image::RgbaImage::new(dw as u32, dh as u32);
+    // 第一趟：由二值 mask 重建「覆盖率场」（连续值 0..1，边缘天然软化）
+    let mut cov = vec![0.0f64; dw * dh];
+    let mut px: Option<Vec<[f64; 3]>> = if use_pixels { Some(vec![[0.0f64; 3]; dw * dh]) } else { None };
     for y in 0..dh {
         for x in 0..dw {
-            let mut cov = 0.0f64;
-            let mut sr = 0.0f64;
-            let mut sg = 0.0f64;
-            let mut sb = 0.0f64;
+            let mut c = 0.0f64;
+            let mut acc = [0.0f64; 3];
             for sy in 0..ss {
                 for sx in 0..ss {
-                    let px = (x as f64 + (sx as f64 + 0.5) * step) / scale - 0.5;
-                    let py = (y as f64 + (sy as f64 + 0.5) * step) / scale - 0.5;
-                    cov += sample_mask(&ev.mask, sw, sh, px, py);
+                    let px_f = (x as f64 + (sx as f64 + 0.5) * step) / scale - 0.5;
+                    let py_f = (y as f64 + (sy as f64 + 0.5) * step) / scale - 0.5;
+                    c += sample_mask(&ev.mask, sw, sh, px_f, py_f);
                     if use_pixels {
-                        let (r, g, b) = sample_rgb(&ev.image, sw, sh, px, py);
-                        sr += r;
-                        sg += g;
-                        sb += b;
+                        let (r, g, b) = sample_rgb(&ev.image, sw, sh, px_f, py_f);
+                        acc[0] += r;
+                        acc[1] += g;
+                        acc[2] += b;
                     }
                 }
             }
-            let cov = (cov * inv).clamp(0.0, 1.0);
-            // binary 为旧二值行为（硬边），其余模式按覆盖率连续混合
+            cov[y * dw + x] = (c * inv).clamp(0.0, 1.0);
+            if let Some(buf) = px.as_mut() {
+                for k in 0..3 {
+                    buf[y * dw + x][k] = acc[k] * inv;
+                }
+            }
+        }
+    }
+    // 笔画加粗：对覆盖率场做最大值滤波（形态学膨胀），软边不被破坏，细笔画变实
+    let rad = ocr.stroke_dilate.clamp(0, 4) as i64;
+    let cov = if rad > 0 {
+        let mut d = vec![0.0f64; dw * dh];
+        for y in 0..dh {
+            for x in 0..dw {
+                let mut m = 0.0f64;
+                for dy in -rad..=rad {
+                    let ny = y as i64 + dy;
+                    if ny < 0 || ny >= dh as i64 {
+                        continue;
+                    }
+                    for dx in -rad..=rad {
+                        let nx = x as i64 + dx;
+                        if nx < 0 || nx >= dw as i64 {
+                            continue;
+                        }
+                        let v = cov[ny as usize * dw + nx as usize];
+                        if v > m {
+                            m = v;
+                        }
+                    }
+                }
+                d[y * dw + x] = m;
+            }
+        }
+        d
+    } else {
+        cov
+    };
+    let gamma = ocr.coverage_gamma.clamp(0.1, 4.0);
+    let mut out = image::RgbaImage::new(dw as u32, dh as u32);
+    for y in 0..dh {
+        for x in 0..dw {
+            let c = cov[y * dw + x];
+            // binary 为旧二值行为（硬边，后处理项对其无效）；其余模式按覆盖率连续混合
             let alpha = if mode == "binary" {
-                if cov >= 0.5 { 1.0 } else { 0.0 }
+                if c >= 0.5 { 1.0 } else { 0.0 }
+            } else if (gamma - 1.0).abs() < 1e-6 {
+                c
             } else {
-                cov
+                c.powf(gamma).clamp(0.0, 1.0)
             };
-            let (fr, fgr, fb) = if use_pixels {
-                (sr * inv, sg * inv, sb * inv)
-            } else {
-                (fgc[0] as f64, fgc[1] as f64, fgc[2] as f64)
+            let (fr, fg, fb) = match px.as_ref() {
+                Some(buf) => {
+                    let p = buf[y * dw + x];
+                    (p[0], p[1], p[2])
+                }
+                None => (fgc[0] as f64, fgc[1] as f64, fgc[2] as f64),
             };
             let mix = |c: f64, b: f64| -> u8 {
                 (c * alpha + b * (1.0 - alpha)).clamp(0.0, 255.0).round() as u8
             };
             out.put_pixel(x as u32, y as u32, image::Rgba([
                 mix(fr, bgc[0] as f64),
-                mix(fgr, bgc[1] as f64),
+                mix(fg, bgc[1] as f64),
                 mix(fb, bgc[2] as f64),
                 255,
             ]));

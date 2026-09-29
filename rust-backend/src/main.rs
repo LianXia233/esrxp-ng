@@ -10,6 +10,7 @@ mod api;
 mod config;
 mod filter;
 mod gpu;
+mod logging;
 mod outputs;
 mod postprocess;
 mod ripper;
@@ -120,6 +121,8 @@ pub fn cmd_rip(args: &[String]) -> Result<()> {
 
     let out_dir = PathBuf::from(&out);
     std::fs::create_dir_all(&out_dir)?;
+    logging::bind_project(&out_dir);
+    logging::info(format!("CLI 抓取开始: video={video} out={}", out_dir.display()));
     let (mut artifacts, proj) = api::write_all_outputs(&res.events, &res.filtered, &video, &cfg, &out_dir)
         .map_err(|e| anyhow::Error::msg(e))?;
     artifacts.insert("project".into(), proj);

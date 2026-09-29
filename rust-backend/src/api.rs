@@ -127,6 +127,9 @@ pub fn router(ui_dir: String, cache_dir: String) -> Router {
         cache_dir,
     };
     let ui_dir2 = state.ui_dir.clone();
+    crate::logging::init_session(Path::new(&state.cache_dir));
+    crate::logging::info(format!("后端启动 v{}: ui={} cache={}",
+                                 env!("CARGO_PKG_VERSION"), state.ui_dir, state.cache_dir));
     let cors = tower_http::cors::CorsLayer::permissive();
     Router::new()
         .route("/api/info", get(api_info))
@@ -151,6 +154,7 @@ pub fn router(ui_dir: String, cache_dir: String) -> Router {
         .route("/api/project/open", post(api_project_open))
         .route("/api/config/default", get(api_config_default))
         .route("/api/config/file", get(api_config_file).post(api_config_save))
+        .route("/api/log", get(api_log_get).post(api_log_post))
         .route("/api/artifact", get(api_artifact))
         .fallback_service(ServeDir::new(&ui_dir2))
         .layer(cors)
@@ -206,13 +210,21 @@ async fn api_video_open(Json(req): Json<OpenReq>) -> Response {
         return err_response(&format!("文件不存在: {}", req.path));
     }
     match VideoSource::open(&req.path) {
-        Ok(vs) => Json(json!({
-            "path": vs.path, "width": vs.width, "height": vs.height,
-            "fps": vs.fps, "duration_s": vs.duration, "frame_count": vs.frame_count,
-            "codec": vs.codec_name, "pix_fmt": vs.pix_fmt,
-        }))
-        .into_response(),
-        Err(e) => err_response(&format!("无法打开视频: {e}")),
+        Ok(vs) => {
+            crate::logging::info(format!(
+                "打开视频: {} {}x{} @ {:.2}fps, {:.2}s, {} 帧",
+                vs.path, vs.width, vs.height, vs.fps, vs.duration, vs.frame_count));
+            Json(json!({
+                "path": vs.path, "width": vs.width, "height": vs.height,
+                "fps": vs.fps, "duration_s": vs.duration, "frame_count": vs.frame_count,
+                "codec": vs.codec_name, "pix_fmt": vs.pix_fmt,
+            }))
+            .into_response()
+        }
+        Err(e) => {
+            crate::logging::error(format!("打开视频失败: {} ({e})", req.path));
+            err_response(&format!("无法打开视频: {e}"))
+        }
     }
 }
 
@@ -221,6 +233,7 @@ async fn api_preview(State(st): State<AppState>, Json(req): Json<PreviewReq>) ->
         return err_response(&format!("文件不存在: {}", req.path));
     }
     let cache = st.cache_dir.clone();
+    let req0_frame = req.frame;
     let out = tokio::task::spawn_blocking(move || -> Result<Value, String> {
         let cfg: AppConfig = serde_json::from_value(req.config).unwrap_or_default();
         let mut vs = VideoSource::open(&req.path).map_err(|e| e.to_string())?;
@@ -335,8 +348,14 @@ async fn api_preview(State(st): State<AppState>, Json(req): Json<PreviewReq>) ->
     .await;
     match out {
         Ok(Ok(v)) => Json(v).into_response(),
-        Ok(Err(e)) => err_response(&e),
-        Err(e) => err_response(&e.to_string()),
+        Ok(Err(e)) => {
+            crate::logging::error(format!("预览失败 frame={}: {e}", req0_frame));
+            err_response(&e)
+        }
+        Err(e) => {
+            crate::logging::error(format!("预览任务异常 frame={}: {e}", req0_frame));
+            err_response(&e.to_string())
+        }
     }
 }
 
@@ -414,7 +433,10 @@ async fn api_config_save(State(st): State<AppState>, Json(req): Json<ConfigSaveR
         }
     }
     match std::fs::write(&p, text) {
-        Ok(_) => Json(json!({ "ok": true, "path": p.display().to_string() })).into_response(),
+        Ok(_) => {
+            crate::logging::info(format!("保存自定义默认配置: {}", p.display()));
+            Json(json!({ "ok": true, "path": p.display().to_string() })).into_response()
+        }
         Err(e) => err_response(&format!("配置保存失败: {e}")),
     }
 }
@@ -450,13 +472,24 @@ async fn api_rip(State(st): State<AppState>, Json(req): Json<RipReq>) -> Respons
         match (|| -> Result<(), String> {
             std::fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
             allow_artifact_dir(out_dir);
+            // 工程目录日志文件：此后所有记录同步落盘到 <工程目录>/esrxp.log
+            crate::logging::bind_project(out_dir);
+            job_log(&mut log, "INFO",
+                    format!("任务开始: video={} out={}", req.path, out_dir.display()));
             let mut vs = VideoSource::open(&req.path).map_err(|e| e.to_string())?;
-            log.push(format!("视频: {}x{} @ {:.2} fps, {:.2}s",
-                             vs.width, vs.height, vs.fps, vs.duration));
+            job_log(&mut log, "INFO",
+                    format!("视频: {}x{} @ {:.2} fps, {:.2}s",
+                            vs.width, vs.height, vs.fps, vs.duration));
             let progress_jobs = jobs.clone();
             let progress_id = id2.clone();
+            let mut last_pct: i64 = -1;
             let res = rip(&mut vs, &cfg, Some(move |done, total, found| {
                 let pct = if total > 0 { done * 100 / total } else { 0 };
+                // 每 10% 记一次：进程异常退出时可从日志定位中断位置
+                if pct != last_pct && pct % 10 == 0 {
+                    last_pct = pct;
+                    crate::logging::info(format!("进度 {pct}% ({done}/{total}) 候选 {found}"));
+                }
                 if let Ok(mut g) = progress_jobs.lock() {
                     if let Some(j) = g.get_mut(&progress_id) {
                         j.progress = json!({"done": done, "total": total, "found": found, "pct": pct});
@@ -466,6 +499,8 @@ async fn api_rip(State(st): State<AppState>, Json(req): Json<RipReq>) -> Respons
 
             let (mut artifacts, project_path) = write_all_outputs(
                 &res.events, &res.filtered, &req.path, &cfg, out_dir)?;
+            job_log(&mut log, "INFO",
+                    format!("产物写出 {} 项到 {}", artifacts.len(), out_dir.display()));
             let vinfo = res.video_info.clone();
 
             let events: Vec<Value> = res.events.iter().enumerate().map(|(i, e)| {
@@ -490,13 +525,14 @@ async fn api_rip(State(st): State<AppState>, Json(req): Json<RipReq>) -> Respons
                 "frames_processed": res.frames_processed, "candidates": res.candidates,
                 "elapsed_s": (res.elapsed_s * 100.0).round() / 100.0,
             }));
-            log.push(format!("完成：字幕 {} 条，耗时 {:.2}s", res.events.len(), res.elapsed_s));
+            job_log(&mut log, "INFO",
+                    format!("完成：字幕 {} 条，耗时 {:.2}s", res.events.len(), res.elapsed_s));
             status = "done";
             Ok(())
         })() {
             Ok(()) => {}
             Err(e) => {
-                log.push(format!("错误: {e}"));
+                job_log(&mut log, "ERROR", format!("错误: {e}"));
                 status = "error";
             }
         }
@@ -533,6 +569,7 @@ async fn api_artifact(State(st): State<AppState>, query: axum::extract::Query<Ha
                 Err(_) => return err_response("文件不存在"),
             };
             if !artifact_dir_allowed(&canon, Some(Path::new(&st.cache_dir))) {
+                crate::logging::warn(format!("拒绝产物读取（白名单外）: {}", path.display()));
                 return (
                     StatusCode::FORBIDDEN,
                     Json(json!({"error": "路径不在允许的产物目录内"})),
@@ -563,6 +600,88 @@ fn mime_guess_light(p: &Path) -> &'static str {
         Some("json") => "application/json",
         _ => "application/octet-stream",
     }
+}
+
+// ------------------------------------------------------------------ 运行日志
+#[derive(Deserialize)]
+pub struct LogQuery {
+    pub path: Option<String>,   // 工程目录或日志文件本身
+    pub n: Option<usize>,       // 返回行数上限
+}
+
+#[derive(Deserialize)]
+pub struct LogReq {
+    pub project: Option<String>, // 工程目录（同时作为后续日志写入目标）
+    pub level: Option<String>,   // INFO / WARN / ERROR / DEBUG
+    pub msg: String,
+}
+
+/// GET /api/log?path=<工程目录|日志文件>&n=500
+/// 优先读磁盘文件（跨进程、重启后仍可追溯），文件不可读时回退内存环形缓冲。
+async fn api_log_get(State(st): State<AppState>, query: axum::extract::Query<LogQuery>) -> Response {
+    let max = query.n.unwrap_or(500).clamp(1, 5000);
+    let mut lines: Vec<String> = Vec::new();
+    if let Some(p) = query.path.as_ref() {
+        let p = Path::new(p);
+        let file = if p.is_dir() {
+            p.join(crate::logging::PROJECT_LOG_NAME)
+        } else {
+            p.to_path_buf()
+        };
+        if file.exists() {
+            match file.canonicalize() {
+                Ok(c) if artifact_dir_allowed(&c, Some(Path::new(&st.cache_dir))) => {
+                    lines = crate::logging::read_tail(&file, max).unwrap_or_else(|e| vec![e]);
+                }
+                Ok(_) => return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({"error": "日志路径不在允许的产物目录内，请先在本会话打开该工程"})),
+                )
+                    .into_response(),
+                Err(e) => lines = vec![format!("日志路径无法解析: {e}")],
+            }
+        }
+    }
+    if lines.is_empty() {
+        lines = crate::logging::tail_lines(max);
+    }
+    Json(json!({
+        "lines": lines, "count": lines.len(),
+        "project_log": crate::logging::project_path(),
+        "session_log": crate::logging::session_path(),
+        "dropped": crate::logging::dropped_count(),
+    }))
+    .into_response()
+}
+
+/// POST /api/log {project, level, msg} —— 写入工程日志（前端异常与关键操作上报）
+/// project 中的目录会被登记进产物白名单，便于 GET /api/log 读回同一份文件。
+async fn api_log_post(Json(req): Json<LogReq>) -> Response {
+    let level = match req.level.as_deref().unwrap_or("INFO") {
+        "INFO" => "INFO", "WARN" => "WARN", "ERROR" => "ERROR", "DEBUG" => "DEBUG",
+        _ => "INFO",
+    };
+    let mut target: Option<String> = None;
+    if let Some(p) = req.project.as_ref() {
+        let d = Path::new(p);
+        if !p.trim().is_empty() && std::fs::create_dir_all(d).is_ok() {
+            allow_artifact_dir(d);
+            target = crate::logging::bind_project(d);
+        }
+    }
+    crate::logging::record(level, &req.msg);
+    Json(json!({
+        "ok": true, "level": level,
+        "project_log": target.or_else(crate::logging::project_path),
+        "session_log": crate::logging::session_path(),
+    }))
+    .into_response()
+}
+
+/// 任务日志：同步进工程日志文件与任务的 log 列表（UI 进度区展示）
+fn job_log(log: &mut Vec<String>, level: &str, msg: String) {
+    crate::logging::record(level, &msg);
+    log.push(format!("[{level}] {msg}"));
 }
 
 // ------------------------------------------------------------------ 共享产物写出
@@ -620,6 +739,14 @@ pub fn write_all_outputs(events: &[SubtitleEvent], filtered: &[SubtitleEvent],
     write_esr(events, filtered, video_path, cfg, &proj, &json!(artifacts))
         .map_err(|e| e.to_string())?;
     artifacts.insert("project".into(), proj.display().to_string());
+    let mut kinds: Vec<&str> = Vec::new();
+    if cfg.output.ssa { kinds.push("ssa"); }
+    if cfg.output.vobsub { kinds.push("vobsub"); }
+    if cfg.output.ocr_png { kinds.push("ocr_png"); }
+    if cfg.output.srt { kinds.push("srt"); }
+    if cfg.output.json_timeline { kinds.push("json_timeline"); }
+    crate::logging::info(format!("产物写出: dir={} 事件={} 输出={}",
+                                 out_dir.display(), events.len(), kinds.join(",")));
     Ok((artifacts, proj.display().to_string()))
 }
 
@@ -733,6 +860,8 @@ fn run_one_rip(path: &str, out_dir: &str, cfg: &AppConfig,
     let out_dir = Path::new(out_dir);
     std::fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
     allow_artifact_dir(out_dir);
+    crate::logging::bind_project(out_dir);
+    crate::logging::info(format!("批处理子任务开始: {path}"));
     let mut vs = VideoSource::open(path).map_err(|e| e.to_string())?;
     let res = rip(&mut vs, cfg, Some(on_progress)).map_err(|e| e.to_string())?;
     let (artifacts, project_path) = write_all_outputs(&res.events, &res.filtered, path, cfg, out_dir)?;
@@ -783,6 +912,8 @@ fn load_project_for_manage(project: &str) -> Result<(Vec<SubtitleEvent>, Vec<Sub
         Ok((events, filtered, video, cfg)) => {
             let out_dir = p.parent().map(|d| d.display().to_string()).unwrap_or_else(|| ".".into());
             allow_artifact_dir(p.parent().unwrap_or_else(|| Path::new(".")));
+            crate::logging::bind_project(p.parent().unwrap_or_else(|| Path::new(".")));
+            crate::logging::info(format!("打开工程: {} （字幕 {} 条）", project, events.len()));
             Ok((events, filtered, video, cfg, out_dir))
         }
         Err(e) => Err(err_response(&format!("工程文件解析失败: {e}"))),
