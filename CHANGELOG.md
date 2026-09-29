@@ -6,6 +6,10 @@
 
 **esrXP 对齐补全** —— Merge Repeat 一键合并 + 管理器位图缩放预览。
 
+### 修复
+- 修正 `merge_repeat_manual` 返回表达式引发的 E0382 编译失败（元组按序求值中值先被移动后被借用）
+- 修复预览等 IPC 请求报 `An object could not be cloned`：Vue 响应式对象不可结构化克隆，`api()` 入口统一深拷贝为纯 JSON 后再经桥转发
+
 ### 新增
 - **合并重复（MIMergeRepeat 对齐）**：`POST /api/manager/merge_repeat`，对工程内全部未删除字幕按 mask IoU 相似度一键合并（可调 `iou_threshold` 默认 0.9、`max_gap_s` 默认 0.2 秒），操作后重导出全部产物；管理器工具行新增「合并重复」按钮
 - **管理器位图列与缩放预览（Manager Zoom 对齐）**：manager/list 与各管理器操作响应新增字幕位图（bbox 裁切 RGB24 base64），表格新增位图列（canvas 渲染、事件级缓存），工具行新增 50%-400% 缩放控件（步进 50%）

@@ -491,6 +491,9 @@ const app = createApp({
     onPathInput(v) { this.videoPath = v; },
     async api(path, body) {
       // 0.4.0 起经 preload 桥接（主进程走命名管道转发后端），不再直接 fetch 端口
+      // IPC 参数走结构化克隆，Vue 响应式对象（Proxy/__ob__）不可克隆，会报
+      // An object could not be cloned —— 统一在此深拷贝为纯 JSON 对象
+      if (body !== undefined) body = JSON.parse(JSON.stringify(body));
       const r = await window.esrxp.request(path, body);
       const bin = Uint8Array.from(atob(r.b64), c => c.charCodeAt(0));
       const ct = r.ct || '';

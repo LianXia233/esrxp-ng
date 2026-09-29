@@ -498,7 +498,8 @@ fn merge_repeat_with(events: Vec<SubtitleEvent>, force: bool, iou_threshold: f64
 pub fn merge_repeat_manual(events: Vec<SubtitleEvent>, iou_threshold: f64, max_gap_s: f64) -> (Vec<SubtitleEvent>, usize) {
     let before = events.len();
     let merged = merge_repeat_with(events, false, iou_threshold, max_gap_s);
-    (merged, before - merged.len())
+    let removed = before - merged.len();
+    (merged, removed)
 }
 
 pub fn crop_event(video: &mut VideoSource, cfg: &AppConfig, ev: &SubtitleEvent) -> Result<SubtitleEvent> {
