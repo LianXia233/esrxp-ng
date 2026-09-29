@@ -2,6 +2,21 @@
 
 本项目语义化版本号（SemVer）。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.3.0] - 2026-09-29
+
+**补齐最后一处未对齐** —— 字幕管理器时间轴编辑（esrXP Subtitle Manager 手动编辑时间轴）。
+
+### 新增
+- **时间轴编辑**：`/api/manager/edit` 单条直接改 start/end（秒），帧号按视频 fps 自动换算并持久化到 .esr
+- **时间平移**：`/api/manager/shift` offset_ms 平移（全部保留字幕或选中 indexes），对齐 esrXP Time Shift
+- **分割**：`/api/manager/split` 在指定秒处把一条字幕切成两条，各自按新区间解码重抓（bbox/mask 精确）
+- **合并**：`/api/manager/merge` 两条字幕合并为一条，按合并区间解码重抓
+- **UI 字幕管理器**：表格 start/end 直接可编辑（t-input-number）、平移/分割/合并控件行
+
+### 修复
+- 时间轴编辑后 .esr 工程与全部产物（SSA/VobSub/SRT/SRT+bitmap/OCR/.esr）同步重导出
+
+## [0.2.0] - 2026-09-29
 ## [0.2.0] - 2026-09-29
 
 **功能全部对齐 esrXP beta 10** —— 按逆向分析报告（`esrXP_re/esrXP逆向分析报告.md`）第 6 节功能对照表逐项补齐。

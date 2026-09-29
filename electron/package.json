@@ -1,7 +1,7 @@
 {
   "name": "esrxp-ng",
   "productName": "esrxp-ng 硬字幕提取",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "esrXP 现代化重构：FFmpeg 解码 + Rust 引擎 + TDesign UI。从视频中提取硬字幕为 VobSub/SSA/OCR 位图。",
   "main": "main.js",
   "author": {

@@ -83,6 +83,16 @@ pub struct PixelReq {
 pub struct ManagerOp {
     pub project: String,        // .esr 工程路径
     pub indexes: Option<Vec<usize>>,
+    pub edits: Option<Vec<TimeEdit>>,
+    pub offset_ms: Option<i64>,
+    pub time: Option<f64>,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct TimeEdit {
+    pub index: usize,
+    pub start: Option<f64>,
+    pub end: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -131,6 +141,10 @@ pub fn router(ui_dir: String, cache_dir: String) -> Router {
         .route("/api/manager/remove", post(api_manager_remove))
         .route("/api/manager/purge", post(api_manager_purge))
         .route("/api/manager/crop", post(api_manager_crop))
+        .route("/api/manager/edit", post(api_manager_edit))
+        .route("/api/manager/shift", post(api_manager_shift))
+        .route("/api/manager/split", post(api_manager_split))
+        .route("/api/manager/merge", post(api_manager_merge))
         .route("/api/manager/export", post(api_manager_export))
         .route("/api/project/open", post(api_project_open))
         .route("/api/artifact", get(api_artifact))
@@ -611,6 +625,12 @@ fn load_project_for_manage(project: &str) -> Result<(Vec<SubtitleEvent>, Vec<Sub
     }
 }
 
+fn persist_project(events: &[SubtitleEvent], filtered: &[SubtitleEvent], video: &str, cfg: &AppConfig, out_dir: &str) -> Result<(std::collections::HashMap<String, String>, Vec<SubtitleEvent>), String> {
+    let (artifacts, _proj) = write_all_outputs(events, filtered, video, cfg, Path::new(out_dir))
+        .map_err(|e| e.to_string())?;
+    Ok((artifacts, events.to_vec()))
+}
+
 fn events_meta(events: &[SubtitleEvent]) -> Vec<Value> {
     events.iter().enumerate().map(|(i, e)| json!({
         "index": i + 1, "start": (e.start * 100.0).round() / 100.0,
@@ -714,6 +734,171 @@ async fn api_manager_crop(Json(req): Json<ManagerOp>) -> Response {
         let (artifacts, proj) = write_all_outputs(&events, &filtered, &video, &cfg, Path::new(&out_dir))
             .map_err(|e| e.to_string())?;
         let _ = proj;
+        Ok(events)
+    }).await;
+    match res {
+        Ok(Ok(events)) => Json(json!({"count": events.len(), "subtitles": events_meta(&events)})).into_response(),
+        Ok(Err(e)) => err_response(&e),
+        Err(e) => err_response(&e.to_string()),
+    }
+}
+
+// 时间轴编辑（字幕管理器：改 start/end）—— 对齐 esrXP Subtitle Manager 时间轴编辑
+async fn api_manager_edit(Json(req): Json<ManagerOp>) -> Response {
+    let r = load_project_for_manage(&req.project);
+    let (mut events, filtered, video, cfg, out_dir) = match r {
+        Ok(x) => x,
+        Err(e) => return e,
+    };
+    let edits = match req.edits {
+        Some(v) => v,
+        None => return err_response("缺少 edits"),
+    };
+    // 取视频 fps 用于换算帧号
+    let fps = {
+        let vs = VideoSource::open(&video);
+        match vs {
+            Ok(v) => v.fps,
+            Err(e) => return err_response(&format!("打开视频失败: {e}")),
+        }
+    };
+    for ed in &edits {
+        if let Some(e) = events.get_mut(ed.index) {
+            if let Some(st) = ed.start {
+                e.start = st;
+                e.start_frame = (st * fps).round() as i64;
+            }
+            if let Some(en) = ed.end {
+                e.end = en;
+                e.end_frame = (en * fps).round() as i64;
+            }
+            e.diff_frames = (e.end_frame - e.start_frame).max(1);
+        }
+    }
+    match persist_project(&events, &filtered, &video, &cfg, &out_dir) {
+        Ok((artifacts, _)) => Json(json!({"count": events.len(), "artifacts": artifacts, "subtitles": events_meta(&events)})).into_response(),
+        Err(e) => err_response(&e),
+    }
+}
+
+// 时间平移（对齐 esrXP Time Shift）：offset_ms 毫秒，作用于全部保留字幕或选中 indexes
+async fn api_manager_shift(Json(req): Json<ManagerOp>) -> Response {
+    let r = load_project_for_manage(&req.project);
+    let (mut events, filtered, video, cfg, out_dir) = match r {
+        Ok(x) => x,
+        Err(e) => return e,
+    };
+    let offset_s = (req.offset_ms.unwrap_or(0) as f64) / 1000.0;
+    if offset_s == 0.0 {
+        return err_response("offset_ms 不能为 0");
+    }
+    let target: Vec<usize> = match &req.indexes {
+        Some(idxs) if !idxs.is_empty() => idxs.clone(),
+        _ => events.iter().enumerate().filter(|(_, e)| !e.deleted).map(|(i, _)| i).collect(),
+    };
+    let fps = {
+        let vs = VideoSource::open(&video);
+        match vs {
+            Ok(v) => v.fps,
+            Err(e) => return err_response(&format!("打开视频失败: {e}")),
+        }
+    };
+    for i in &target {
+        if let Some(e) = events.get_mut(*i) {
+            e.start = (e.start + offset_s).max(0.0);
+            e.end = (e.end + offset_s).max(0.0);
+            e.start_frame = (e.start * fps).round() as i64;
+            e.end_frame = (e.end * fps).round() as i64;
+            e.diff_frames = (e.end_frame - e.start_frame).max(1);
+        }
+    }
+    match persist_project(&events, &filtered, &video, &cfg, &out_dir) {
+        Ok((artifacts, _)) => Json(json!({"count": events.len(), "offset_ms": req.offset_ms.unwrap_or(0), "artifacts": artifacts, "subtitles": events_meta(&events)})).into_response(),
+        Err(e) => err_response(&e),
+    }
+}
+
+// 分割：在 time 秒处把一条字幕切成两条（各自按新区间重抓）
+async fn api_manager_split(Json(req): Json<ManagerOp>) -> Response {
+    let r = load_project_for_manage(&req.project);
+    let (mut events, filtered, video, cfg, out_dir) = match r {
+        Ok(x) => x,
+        Err(e) => return e,
+    };
+    let idx = match &req.indexes {
+        Some(v) if v.len() == 1 => v[0],
+        _ => return err_response("split 需指定单条 index"),
+    };
+    let t = req.time.unwrap_or(-1.0);
+    if t <= 0.0 {
+        return err_response("split 需指定 time（秒）");
+    }
+    let res = tokio::task::spawn_blocking(move || -> Result<Vec<SubtitleEvent>, String> {
+        let ev = events.get(idx).cloned().ok_or("index 越界")?;
+        if t <= ev.start || t >= ev.end {
+            return Err(format!("分割时间 {t:.2}s 需在字幕区间内（{:.2}–{:.2}s）", ev.start, ev.end));
+        }
+        let mut vs = VideoSource::open(&video).map_err(|e| e.to_string())?;
+        let fps = vs.fps;
+        let mut e1 = ev.clone();
+        e1.end = t;
+        e1.end_frame = (t * fps).round() as i64;
+        e1.diff_frames = (e1.end_frame - e1.start_frame).max(1);
+        let mut e2 = ev.clone();
+        e2.start = t;
+        e2.start_frame = (t * fps).round() as i64;
+        e2.diff_frames = (e2.end_frame - e2.start_frame).max(1);
+        let c1 = crop_event(&mut vs, &cfg, &e1).map_err(|e| format!("前半段重抓失败: {e}"))?;
+        let c2 = crop_event(&mut vs, &cfg, &e2).map_err(|e| format!("后半段重抓失败: {e}"))?;
+        events[idx] = c1;
+        events.push(c2);
+        events.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
+        let (artifacts, _) = write_all_outputs(&events, &filtered, &video, &cfg, Path::new(&out_dir))
+            .map_err(|e| e.to_string())?;
+        let _ = artifacts;
+        Ok(events)
+    }).await;
+    match res {
+        Ok(Ok(events)) => Json(json!({"count": events.len(), "subtitles": events_meta(&events)})).into_response(),
+        Ok(Err(e)) => err_response(&e),
+        Err(e) => err_response(&e.to_string()),
+    }
+}
+
+// 合并：两条相邻字幕合并为一条（按合并区间重抓）
+async fn api_manager_merge(Json(req): Json<ManagerOp>) -> Response {
+    let r = load_project_for_manage(&req.project);
+    let (mut events, filtered, video, cfg, out_dir) = match r {
+        Ok(x) => x,
+        Err(e) => return e,
+    };
+    let idxs = req.indexes.unwrap_or_default();
+    if idxs.len() != 2 {
+        return err_response("merge 需指定两条 index");
+    }
+    let res = tokio::task::spawn_blocking(move || -> Result<Vec<SubtitleEvent>, String> {
+        let (a, b) = match (events.get(idxs[0]).cloned(), events.get(idxs[1]).cloned()) {
+            (Some(x), Some(y)) => (x, y),
+            _ => return Err("index 越界".into()),
+        };
+        let mut vs = VideoSource::open(&video).map_err(|e| e.to_string())?;
+        let fps = vs.fps;
+        let mut merged = a.clone();
+        merged.start = a.start.min(b.start);
+        merged.end = a.end.max(b.end);
+        merged.start_frame = (merged.start * fps).round() as i64;
+        merged.end_frame = (merged.end * fps).round() as i64;
+        merged.diff_frames = (merged.end_frame - merged.start_frame).max(1);
+        let c = crop_event(&mut vs, &cfg, &merged).map_err(|e| format!("合并区间重抓失败: {e}"))?;
+        // 高 index 先删，避免错位
+        let (lo, hi) = (idxs[0].min(idxs[1]), idxs[0].max(idxs[1]));
+        events.remove(hi);
+        events.remove(lo);
+        events.push(c);
+        events.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
+        let (artifacts, _) = write_all_outputs(&events, &filtered, &video, &cfg, Path::new(&out_dir))
+            .map_err(|e| e.to_string())?;
+        let _ = artifacts;
         Ok(events)
     }).await;
     match res {

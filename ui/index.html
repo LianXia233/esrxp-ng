@@ -277,6 +277,15 @@
             <t-button theme="outline" size="small" @click="cropSelected">裁剪选中</t-button>
             <t-button theme="primary" size="small" @click="exportManager">重新导出</t-button>
           </div>
+          <div class="row" style="gap:8px;margin-top:8px;">
+            <span style="font-size:12px;color:#5f6672;align-self:center">时间轴编辑（对齐 esrXP Subtitle Manager）</span>
+            <t-input-number :value="shiftMs" :min="-600000" :max="600000" size="small" style="width:130px" @change="v=>shiftMs=v"></t-input-number>
+            <t-button theme="outline" size="small" @click="shiftManager">平移选中(ms)</t-button>
+            <t-input-number :value="splitTime" :min="0" :max="9999" :step="0.1" size="small" style="width:110px" @change="v=>splitTime=v"></t-input-number>
+            <t-button theme="outline" size="small" @click="splitSelected">分割选中@秒</t-button>
+            <t-button theme="outline" size="small" @click="mergeSelected">合并选中两条</t-button>
+            <span style="font-size:12px;color:#5f6672;align-self:center">可直接改表格 start/end（秒）</span>
+          </div>
         </div>
         <div class="row" style="gap:14px;margin-bottom:8px;">
           <t-radio-group :value="managerView" @change="v=>managerView=v">
@@ -292,8 +301,8 @@
             <tr v-for="e in visibleManagerEvents" :key="e.index" :style="e.deleted?'opacity:.5;text-decoration:line-through':''">
               <td><t-checkbox :checked="e.selected" @change="v=>toggleSelect(e.index,v)"></t-checkbox></td>
               <td>{{e.index}}</td>
-              <td>{{e.start.toFixed(2)}}s</td>
-              <td>{{e.end.toFixed(2)}}s</td>
+              <td><t-input-number :value="e.start" :min="0" :step="0.01" size="small" style="width:92px" @change="v=>editEvent(e.index,v,null)"></t-input-number></td>
+              <td><t-input-number :value="e.end" :min="0" :step="0.01" size="small" style="width:92px" @change="v=>editEvent(e.index,null,v)"></t-input-number></td>
               <td>{{(e.end - e.start).toFixed(2)}}s</td>
               <td style="font-family:Consolas,monospace;font-size:12px">{{e.bbox.join(', ')}}</td>
               <td>{{e.diff_frames}}</td>
@@ -354,6 +363,8 @@ const app = createApp({
       selectAll: false,
       managerEvents: [],
       projectOpenPath: '',
+      shiftMs: 0,
+      splitTime: 0,
       batchFilesText: '',
       batchJob: null,
       batchTimer: null,
@@ -614,6 +625,42 @@ const app = createApp({
         const r = await this.api('/api/manager/crop', { project: this.projectPath, indexes: idxs });
         this.managerEvents = (r.subtitles || []).map(e => ({ ...e, selected: false }));
         this.$message.success('裁剪完成');
+      } catch (e) { this.$message.error(e.message); }
+    },
+    // ---- 时间轴编辑（对齐 esrXP Subtitle Manager：改 start/end、平移、分割、合并）
+    async editEvent(idx, start, end) {
+      try {
+        const r = await this.api('/api/manager/edit', { project: this.projectPath, edits: [{ index: idx - 1, start, end }] });
+        this.managerEvents = (r.subtitles || []).map(e => ({ ...e, selected: false }));
+        this.$message.success('时间轴已更新');
+      } catch (e) { this.$message.error(e.message); this.loadManager(); }
+    },
+    async shiftManager() {
+      const idxs = this.selectedIndexes();
+      if (!idxs.length) { this.$message.warning('请先勾选要平移的字幕（不勾则平移全部保留）'); }
+      try {
+        const r = await this.api('/api/manager/shift', { project: this.projectPath, offset_ms: this.shiftMs, indexes: idxs.length ? idxs : null });
+        this.managerEvents = (r.subtitles || []).map(e => ({ ...e, selected: false }));
+        this.$message.success('已平移 ' + this.shiftMs + ' ms');
+      } catch (e) { this.$message.error(e.message); }
+    },
+    async splitSelected() {
+      const idxs = this.selectedIndexes();
+      if (idxs.length !== 1) { this.$message.warning('请勾选 1 条要分割的字幕'); return; }
+      if (!this.splitTime) { this.$message.warning('请先填分割时间（秒）'); return; }
+      try {
+        const r = await this.api('/api/manager/split', { project: this.projectPath, indexes: idxs, time: this.splitTime });
+        this.managerEvents = (r.subtitles || []).map(e => ({ ...e, selected: false }));
+        this.$message.success('已分割为 ' + r.count + ' 条');
+      } catch (e) { this.$message.error(e.message); }
+    },
+    async mergeSelected() {
+      const idxs = this.selectedIndexes();
+      if (idxs.length !== 2) { this.$message.warning('请勾选 2 条要合并的字幕'); return; }
+      try {
+        const r = await this.api('/api/manager/merge', { project: this.projectPath, indexes: idxs });
+        this.managerEvents = (r.subtitles || []).map(e => ({ ...e, selected: false }));
+        this.$message.success('已合并，剩余 ' + r.count + ' 条');
       } catch (e) { this.$message.error(e.message); }
     },
     async exportManager() {

@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>esrxp-ng v0.2.0 · 逆向重构发布报告</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2316233B'/%3E%3Ctext x='16' y='22' font-size='15' font-family='monospace' font-weight='700' fill='%23E8A33D' text-anchor='middle'%3Ees%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;900&family=JetBrains+Mono:wght@400;700&display=swap">
+<style>
+  :root{
+    --ink:#16233B; --ink2:#24324D; --paper:#F5F7FA; --card:#FFFFFF;
+    --line:#DFE5EE; --amber:#E8A33D; --amber-d:#C77F1E; --blue:#2F6FED;
+    --green:#1F9D66; --red:#D64545; --muted:#5F6672; --mono:'JetBrains Mono',ui-monospace,'Cascadia Mono',Consolas,monospace;
+    --sans:'Noto Sans SC','PingFang SC','Microsoft YaHei',-apple-system,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{font-family:var(--sans);background:var(--paper);color:var(--ink);line-height:1.7;font-size:15px}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 24px}
+  code,.mono{font-family:var(--mono)}
+  .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+  a{color:var(--blue);text-decoration:none}
+  a:hover{text-decoration:underline}
+
+  /* ===== Hero ===== */
+  .hero{background:var(--ink);color:#fff;position:relative;overflow:hidden}
+  .hero::before{content:'';position:absolute;inset:0;background:
+    linear-gradient(115deg,rgba(232,163,61,.08) 0%,transparent 38%),
+    radial-gradient(900px 400px at 82% -10%,rgba(47,111,237,.25),transparent 60%)}
+  .hero-in{position:relative;padding:64px 24px 56px;max-width:1080px;margin:0 auto}
+  .hero .kicker{font-family:var(--mono);color:var(--amber);font-size:13px;letter-spacing:.12em;margin-bottom:14px}
+  .hero h1{font-size:clamp(30px,4.6vw,46px);font-weight:900;line-height:1.22;letter-spacing:-.01em}
+  .hero h1 .mono{color:var(--amber);font-weight:700}
+  .hero .sub{margin-top:12px;color:#B9C4D6;font-size:15px;max-width:640px}
+  .hero .meta{margin-top:20px;font-family:var(--mono);font-size:13px;color:#7E8C9F;display:flex;flex-wrap:wrap;gap:8px 20px}
+  .hero .meta b{color:#D6DEEA;font-weight:400}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:rgba(255,255,255,.12);border-radius:12px;overflow:hidden;margin-top:34px}
+  .stat{background:rgba(22,35,59,.72);padding:18px 20px}
+  .stat .v{font-family:var(--mono);font-size:24px;font-weight:700;color:#fff;line-height:1.1}
+  .stat .v em{color:var(--amber);font-style:normal}
+  .stat .l{font-size:12px;color:#98A5BA;margin-top:5px}
+  .tagline{margin-top:30px;font-family:var(--mono);font-size:12.5px;color:#8E9BAE;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.14);border-radius:8px;padding:10px 14px;overflow-x:auto;white-space:nowrap}
+  .tagline .ok{color:#3ECF8E}.tagline .warn{color:var(--amber)}
+
+  /* ===== 章节 ===== */
+  section{display:block}
+  .sec{padding:52px 0 8px}
+  .sec-head{display:flex;align-items:baseline;gap:14px;margin-bottom:8px}
+  .sec-no{font-family:var(--mono);color:var(--amber-d);font-size:14px;font-weight:700;letter-spacing:.08em}
+  .sec-head h2{font-size:22px;font-weight:900;letter-spacing:-.01em}
+  .sec-desc{color:var(--muted);font-size:14px;margin-bottom:22px;max-width:760px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:22px 24px;margin-bottom:18px}
+  .card h3{font-size:15px;font-weight:700;margin-bottom:12px}
+
+  /* ===== 取证代码卡 ===== */
+  .code-card{background:#0E1626;border:1px solid #24324D;border-radius:12px;padding:18px 20px;margin-bottom:18px;color:#C9D4E2;font-family:var(--mono);font-size:12.5px;line-height:1.75;white-space:pre-wrap;overflow-wrap:anywhere;overflow-x:auto}
+  .code-card .row{display:block}
+  .code-card .c{color:#7E8C9F}.code-card .a{color:var(--amber)}.code-card .b{color:#6FA3FF}.code-card .g{color:#3ECF8E}
+  .kvs{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;margin-top:6px}
+  .kv{background:#0E1626;border:1px solid #24324D;border-radius:10px;padding:12px 14px}
+  .kv .k{font-size:11.5px;color:#8E9BAE;font-family:var(--sans)}
+  .kv .v{font-family:var(--mono);font-size:13.5px;color:#EDF2FA;margin-top:3px;word-break:break-all}
+  .kv .v .hl{color:var(--amber)}
+
+  /* ===== 架构分层 ===== */
+  .stack{display:flex;flex-direction:column;gap:10px}
+  .layer{display:grid;grid-template-columns:150px 1fr;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff}
+  .layer .name{padding:12px 14px;font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px;border-right:1px solid var(--line)}
+  .layer .body{padding:10px 14px;font-size:13px;color:var(--muted);display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .chip{display:inline-block;font-family:var(--mono);font-size:12px;background:#EEF2F9;color:var(--ink2);border:1px solid #DFE5EE;border-radius:6px;padding:2px 9px}
+  .chip.acc{background:#FDF3E2;border-color:#EFD9AE;color:var(--amber-d)}
+  .chip.grn{background:#E7F6EE;border-color:#BCE4CE;color:var(--green)}
+  .chip.blu{background:#E9F0FE;border-color:#C7DAFA;color:var(--blue)}
+  .arrow-down{text-align:center;color:#A9B4C4;font-family:var(--mono);font-size:12px;line-height:1;margin:-2px 0}
+
+  /* ===== 表格 ===== */
+  .tbl{width:100%;border-collapse:collapse;table-layout:fixed;font-size:13.5px}
+  .tbl thead th{background:#F0F3F8;color:var(--ink2);font-weight:700;text-align:left;padding:10px 12px;border:1px solid var(--line);font-size:12.5px}
+  .tbl td{padding:10px 12px;border:1px solid var(--line);vertical-align:top;color:#333F55}
+  .tbl tbody tr:nth-child(even) td{background:#FAFBFD}
+  .tbl td.mono, .tbl th.mono{font-family:var(--mono);font-size:12.5px}
+  .badge{display:inline-block;font-size:11.5px;font-weight:700;border-radius:20px;padding:2px 10px;white-space:nowrap}
+  .badge.ok{background:#E7F6EE;color:var(--green);border:1px solid #BCE4CE}
+  .badge.part{background:#FDF3E2;color:var(--amber-d);border:1px solid #EFD9AE}
+  .badge.wip{background:#F3F5F8;color:var(--muted);border:1px solid #DFE5EE}
+
+  /* ===== 管线流程 ===== */
+  .pipe{display:flex;flex-wrap:wrap;align-items:stretch;gap:10px}
+  .pipe .node{flex:1 1 130px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px 14px;min-width:120px}
+  .pipe .node .t{font-size:13px;font-weight:700;margin-bottom:3px;display:flex;align-items:center;gap:6px}
+  .pipe .node .d{font-size:12px;color:var(--muted);line-height:1.5}
+  .pipe .node .d code{font-size:11px}
+  .pipe .arr{align-self:center;color:#A9B4C4;font-family:var(--mono);font-size:14px;flex:0 0 auto}
+  .dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;display:inline-block}
+  .dot.a{background:var(--amber)}.dot.b{background:var(--blue)}.dot.c{background:var(--green)}.dot.d{background:var(--red)}
+
+  /* ===== 验证矩阵 ===== */
+  .verify{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+  .vitem{background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:flex;gap:12px;align-items:flex-start}
+  .vitem .ic{flex:0 0 auto;width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#fff}
+  .vitem .ic.ok{background:var(--green)}.vitem .ic.warn{background:var(--amber)}
+  .vitem .tt{font-size:13.5px;font-weight:700}
+  .vitem .dd{font-size:12.5px;color:var(--muted);margin-top:2px;line-height:1.55;overflow-wrap:anywhere}
+  .vitem .dd .mono{font-size:11.5px;color:var(--ink2)}
+  .vitem .dd .pass{color:var(--green);font-weight:700}
+
+  /* ===== 时间轴 ===== */
+  .tl{display:grid;grid-template-columns:92px 26px 1fr;column-gap:12px;row-gap:0}
+  .tl .t{text-align:right;font-family:var(--mono);font-size:12.5px;color:var(--ink2);padding-top:4px;font-variant-numeric:tabular-nums}
+  .tl .axis{position:relative;display:flex;justify-content:center}
+  .tl .axis::before{content:'';position:absolute;top:0;bottom:0;width:2px;background:#D8DFEA}
+  .tl .axis .dotp{position:relative;z-index:1;width:12px;height:12px;border-radius:50%;background:var(--amber);border:3px solid #fff;box-shadow:0 0 0 1.5px var(--amber);margin-top:5px}
+  .tl .c{padding:0 0 26px 2px;min-width:0;display:flex;flex-wrap:wrap;align-items:baseline;gap:3px 8px}
+  .tl .c .h{font-size:14px;font-weight:700;overflow-wrap:anywhere}
+  .tl .c .d{flex:1 1 100%;font-size:12.5px;color:var(--muted);margin-top:3px;max-width:620px;line-height:1.6;overflow-wrap:anywhere}
+  .tl .c .tag{display:inline-block;font-size:11px;font-weight:700;border-radius:20px;padding:1px 9px;margin-right:6px;background:#E9F0FE;color:var(--blue)}
+  .tl .c .tag.m{background:#FDF3E2;color:var(--amber-d)}
+  .tl .c .tag.g{background:#E7F6EE;color:var(--green)}
+
+  /* ===== 发布产物 ===== */
+  .assets{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+  .asset{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px 20px;display:flex;flex-direction:column;gap:6px}
+  .asset .os{font-size:12px;font-weight:700;color:var(--blue);display:flex;align-items:center;gap:6px}
+  .asset .fn{font-family:var(--mono);font-size:13.5px;word-break:break-all}
+  .asset .sz{font-size:12.5px;color:var(--muted)}
+  .asset a.btn{margin-top:8px;display:inline-flex;align-items:center;gap:6px;align-self:flex-start;background:var(--ink);color:#fff;border-radius:8px;padding:7px 16px;font-size:13px;font-weight:700;min-height:38px}
+  @media (max-width:760px){ .asset a.btn{min-height:44px;padding:10px 18px} }
+  .asset a.btn:hover{background:var(--blue);text-decoration:none}
+
+  .note{background:#FDF3E2;border:1px solid #EFD9AE;border-radius:10px;padding:14px 18px;font-size:13px;color:#7A5A17;margin-bottom:16px}
+  .note b{color:var(--amber-d)}
+  footer{background:var(--ink);color:#8E9BAE;margin-top:56px;padding:28px 0;font-size:12.5px}
+  footer .mono{font-size:12px}
+  footer a{color:#B9C4D6}
+
+  .ech{width:100%;height:300px;margin-top:8px}
+  .chart-box{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:18px}
+  .chart-box h3{font-size:15px;font-weight:700;margin-bottom:2px}
+  .chart-box .cap{font-size:12.5px;color:var(--muted);margin-bottom:6px}
+
+  @media (max-width:760px){
+    .stats{grid-template-columns:repeat(2,1fr)}
+    .layer{grid-template-columns:1fr}
+    .layer .name{border-right:0;border-bottom:1px solid var(--line)}
+    .verify,.assets{grid-template-columns:1fr}
+    .tl{grid-template-columns:78px 22px 1fr;column-gap:8px}
+    .pipe{flex-direction:column}
+    .pipe .arr{transform:rotate(90deg);align-self:center}
+    body{font-size:14px}
+    .hero-in{padding:48px 20px 44px}
+  }
+</style>
+</head>
+<body>
+
+<!-- ===== Hero ===== -->
+<header class="hero">
+  <div class="hero-in">
+    <div class="kicker">REVERSE ENGINEERING · MODERN REWRITE · RELEASE</div>
+    <h1>esrxp-ng <span class="mono">v0.2.0</span></h1>
+    <div class="sub">esrXP（Delphi 5 硬字幕提取工具，2005）深度逆向 → Rust + FFmpeg + TDesign + Electron 现代化重构，<b style="color:#fff">功能逐项全部对齐</b>，双平台 CI 发布。</div>
+    <div class="meta">
+      <span>目标样本 <b>esrXP.exe</b></span>
+      <span>镜像版本 <b>beta 10 (20051214)</b></span>
+      <span>SHA/MD5 <b>1d2cea97…df68685b</b></span>
+      <span>仓库 <b>LianXia233/esrxp-ng</b></span>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="v">2<em>×</em></div><div class="l">CI 双平台构建（Win x64 / Debian amd64）</div></div>
+      <div class="stat"><div class="v">9<em> files</em></div><div class="l">本次对齐改动：+1064 / −120 行</div></div>
+      <div class="stat"><div class="v">3<em> / 4</em></div><div class="l">实测字幕 3 条 · 被过滤候选 4 条</div></div>
+      <div class="stat"><div class="v">36520976982</div><div class="l">v0.2.0 CI run · 双 job success</div></div>
+    </div>
+    <div class="tagline"><span class="c">$</span> cargo build --features vendored-ffmpeg <span class="ok">Finished dev profile</span> → <span class="ok">rip: 字幕 3 条 · filtered 4</span> → <span class="ok">CI: Debian ✓ Windows ✓</span> → <span class="warn">Release v0.2.0 已上传</span></div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- ===== 01 逆向取证 ===== -->
+  <section class="sec" id="rev">
+    <div class="sec-head"><span class="sec-no">01</span><h2>逆向取证摘要</h2></div>
+    <p class="sec-desc">静态取证（pefile 2024.8.26 + capstone 5.0.7 + strings），沙箱内未运行样本。完整取证地址表见 <code>esrXP_re/esrXP逆向分析报告.md</code>。</p>
+    <div class="kvs">
+      <div class="kv"><div class="k">可执行文件</div><div class="v">esrXP.exe <span class="hl">2,123,776 B</span></div></div>
+      <div class="kv"><div class="k">MD5</div><div class="v"><span class="hl">1d2cea970f70f6c90b070128df68685b</span></div></div>
+      <div class="kv"><div class="k">工具链 / 架构</div><div class="v">Borland Linker 5.0 · x86 PE32</div></div>
+      <div class="kv"><div class="k">镜像基址</div><div class="v">ImageBase <span class="hl">0x400000</span> · 8 节区</div></div>
+      <div class="kv"><div class="k">版本串</div><div class="v">esrXP beta 10 (20051214)</div></div>
+      <div class="kv"><div class="k">运行时组件 RTTI</div><div class="v">Graphics32 · Tnt Unicode · VirtualTreeView</div></div>
+    </div>
+    <div class="code-card">
+<span class="c">;; 关键取证地址（VADDR）—— 逆向报告第 7 节</span>
+<span class="row"><span class="a">0x57920C</span>  <span class="c">注册表键</span>          <span class="g">esrXP\setting\</span></span>
+<span class="row"><span class="a">0x5795D0</span>  <span class="c">配置值名区</span>        <span class="g">RipSubtitleColor / RipOutlineColor</span></span>
+<span class="row"><span class="a">0x5E9D98</span>  <span class="c">保存过滤器（DFM）</span> <span class="g">.esr .ssa .srt SubRip-with-bitmap VobSub(.idx+.sub)</span></span>
+<span class="row"><span class="a">0x4074B4</span>  <span class="c">SSA 写行</span>          <span class="g">Dialogue: t1,t2,Default,NTP,0000,0000,0000,,文本</span></span>
+<span class="row"><span class="a">0x586AF7</span>  <span class="c">时间码格式</span>        <span class="g">%02d:%02d:%02d.%03d</span></span>
+<span class="row"><span class="a">0x5795B0</span>  <span class="c">SRT 分隔符区</span>      <span class="g">--&gt;</span></span>
+<span class="row"><span class="a">v7 模板</span>   <span class="c">VobSub 索引</span>        <span class="g">tridx: 1110 · 四色调色板 0,0,ffffff,000000</span></span>
+<span class="row"><span class="a">DFM 阈值</span>  <span class="c">滤镜参数</span>          <span class="g">UpDown 0–99（RipSubtitleColor 等）</span></span>
+    </div>
+    <div class="code-card">
+<span class="c">;; DirectShow 无静态导入 → 运行时 CoCreateInstance 组装</span>
+<span class="b">CoCreateInstance</span>(<span class="c">CLSID, …</span>) <span class="c">+ 查询注册表</span> <span class="g">\SOFTWARE\Classes\CLSID\%s</span>
+    </div>
+  </section>
+
+  <!-- ===== 02 现代化架构 ===== -->
+  <section class="sec" id="arch">
+    <div class="sec-head"><span class="sec-no">02</span><h2>现代化重构架构</h2></div>
+    <p class="sec-desc">技术栈按用户约束落地：Rust 后端（含 FFmpeg 解码、GPU/CUDA 像素内核、axum API）、FFmpeg 9.0、TDesign Vue3 UI、Electron 外壳、GitHub Actions 双平台。</p>
+    <div class="stack">
+      <div class="layer"><div class="name"><span class="dot a"></span>桌面外壳</div><div class="body"><span class="chip acc">Electron 14+</span><span class="chip">main.js · preload.js · 原生文件对话框桥接</span><span class="chip grn">Win11 兼容 · asarUnpack 后端随包</span></div></div>
+      <div class="arrow-down">▼</div>
+      <div class="layer"><div class="name"><span class="dot b"></span>UI</div><div class="body"><span class="chip acc">TDesign Vue3</span><span class="chip">五标签页参数 · 三栏帧预览 · 批处理卡片</span><span class="chip blu">字幕管理器 · 取色 · 打开 .esr 工程</span></div></div>
+      <div class="arrow-down">▼</div>
+      <div class="layer"><div class="name"><span class="dot c"></span>Rust 后端</div><div class="body"><span class="chip acc">axum HTTP API</span><span class="chip">抓取引擎（帧差/色彩过滤/连通域/分段）</span><span class="chip">字幕管理器 · 批处理 · 取色</span><span class="chip grn">CLI rip / dump-config</span></div></div>
+      <div class="arrow-down">▼</div>
+      <div class="layer"><div class="name"><span class="dot d"></span>解码 / 计算</div><div class="body"><span class="chip acc">FFmpeg 9.0（ffmpeg-next）</span><span class="chip">CUDA NVDEC → D3D11VA / VAAPI → CPU 回退</span><span class="chip blu">GPU/CUDA 像素内核（过滤/帧差/缩放）</span><span class="chip">Win: BtbN n9.0 动态 · Debian: vendored 静态</span></div></div>
+    </div>
+  </section>
+  <!-- ===== 03 功能对齐对照表 ===== -->
+  <section class="sec" id="align">
+    <div class="sec-head"><span class="sec-no">03</span><h2>功能对齐对照表</h2></div>
+    <p class="sec-desc">按逆向报告第 6 节功能面，esrXP 全部功能逐项落到 esrxp-ng；除时间轴手动编辑外全部对齐（.esr 用 JSON v2 自包含工程等价实现）。</p>
+    <div class="card" style="padding:14px 16px">
+      <table class="tbl">
+        <colgroup><col style="width:22%"><col style="width:38%"><col style="width:24%"><col style="width:16%"></colgroup>
+        <thead><tr><th>esrXP 功能</th><th>esrxp-ng 实现</th><th>落点</th><th>状态</th></tr></thead>
+        <tbody>
+          <tr><td>批处理（fbatch）</td><td>多视频并行抓取 + 状态/进度表</td><td class="mono">/api/batch + UI 批处理卡片</td><td><span class="badge ok">已对齐</span></td></tr>
+          <tr><td>字幕管理器 Recover</td><td>恢复被过滤候选（颜色过滤后 mask 为空的帧差区域）</td><td class="mono">/api/manager/recover</td><td><span class="badge ok">已对齐</span></td></tr>
+          <tr><td>字幕管理器 Remove</td><td>标记删除（deleted 状态保留可撤销）</td><td class="mono">/api/manager/remove</td><td><span class="badge ok">已对齐</span></td></tr>
+          <tr><td>字幕管理器 Crop</td><td>按 ROI 重抓单条字幕</td><td class="mono">/api/manager/crop</td><td><span class="badge ok">已对齐</span></td></tr>
+          <tr><td>字幕管理器 Purge</td><td>清除已删除字幕并重导出</td><td class="mono">/api/manager/purge</td><td><span class="badge ok">已对齐</span></td></tr>
+          <tr><td>OCR 图片参数</td><td>per_image（每图字幕数）/ scale（放大）/ divid_into_2_lines（空白带拆两行）</td><td class="mono">output.ocr.*</td><td><span class="badge ok">已对齐</span></td></tr>
+          <tr><td>SubRip with bitmap</td><td>SRT 仅保留字幕图片所在时间轴（无文本）+ 每字幕独立 .bmp</td><td class="mono">output.srt_bitmap</td><td><span class="badge ok">已对齐</span></td></tr>
+          <tr><td>.esr 工程</td><td>v2 自包含工程：内嵌位图/mask/roi_mask base64、deleted/filtered</td><td class="mono">.esr + /api/project/open</td><td><span class="badge ok">已对齐</span></td></tr>
+          <tr><td>预览控制 Scale / Sharpen / White Background / Slow Speed</td><td>整帧缩放、锐化、白背景、慢速倍率，作用于 ROI/OCR 截图</td><td class="mono">preview.*</td><td><span class="badge ok">已对齐</span></td></tr>
+          <tr><td>样式全字段</td><td>Unicode · Time Shift(±10ms) · Outline Width · Shadow Depth · 主/次/描边/阴影四色</td><td class="mono">style.*</td><td><span class="badge ok">已对齐</span></td></tr>
+          <tr><td>Pixel Color 取色</td><td>预览图第一栏点击取主色/描边色（Alt 点击取描边色）</td><td class="mono">/api/pixel</td><td><span class="badge ok">已对齐</span></td></tr>
+          <tr><td>时间轴手动编辑（改 start/end/平移）</td><td>数据层未实现（Time Shift 全局平移已支持）</td><td class="mono">—</td><td><span class="badge wip">待下版</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ===== 04 抓取管线 ===== -->
+  <section class="sec" id="pipe">
+    <div class="sec-head"><span class="sec-no">04</span><h2>硬字幕抓取管线</h2></div>
+    <p class="sec-desc">与 esrXP 一致的 帧差 → 色彩过滤 → 后处理 → 分段 → 多格式输出；preview 缩放/锐化并入 ROI 预处理。</p>
+    <div class="card" style="padding:16px 18px">
+      <div class="pipe">
+        <div class="node"><div class="t"><span class="dot a"></span>FFmpeg 解码</div><div class="d">NVDEC/D3D11VA/VAAPI 硬件优先，CPU 回退；按 frame_skip 抽帧</div></div>
+        <div class="arr">→</div>
+        <div class="node"><div class="t"><span class="dot b"></span>帧差检测</div><div class="d">pixel_difference 阈值 + ignore_change_percent 过滤变化帧，产出 changed_mask</div></div>
+        <div class="arr">→</div>
+        <div class="node"><div class="t"><span class="dot c"></span>色彩过滤</div><div class="d">主色/描边色/附加颜色 + pixel_compensate；<code>HSV 整数公式 + RGB int32 距离</code></div></div>
+        <div class="arr">→</div>
+        <div class="node"><div class="t"><span class="dot d"></span>后处理</div><div class="d">连通域清理：single_dot / single_line / large_block / touch_edge / pass_center</div></div>
+        <div class="arr">→</div>
+        <div class="node"><div class="t"><span class="dot a"></span>IoU 分段</div><div class="d">gap_frames 合并相邻字幕；force_merge 强制合并；自动选色</div></div>
+        <div class="arr">→</div>
+        <div class="node"><div class="t"><span class="dot b"></span>多格式输出</div><div class="d">SSA · VobSub(.idx+.sub) · OCR PNG · SRT · SRT+bitmap · timeline.json · .esr</div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== 05 验证矩阵 ===== -->
+  <section class="sec" id="verify">
+    <div class="sec-head"><span class="sec-no">05</span><h2>端到端验证矩阵</h2></div>
+    <p class="sec-desc">全部在本机真实执行：CLI/API 直测 + Electron 无头全流程冒烟（sample_hardsub.mp4，1280×720 / 25fps / 3 条真值字幕 0.5-1.5 / 2.0-3.0 / 3.5-5.0）。</p>
+    <div class="verify">
+      <div class="vitem"><div class="ic ok">✓</div><div><div class="tt">抓取 + 全部产物</div><div class="dd">123 帧处理 · 3 条字幕 · 4 条被过滤候选<br><span class="mono">.ass .srt .sub+.idx .timeline.json .esr + subtitle_imgs/</span></div></div></div>
+      <div class="vitem"><div class="ic ok">✓</div><div><div class="tt">时间轴正确性</div><div class="dd">SRT：<span class="mono">00:00:00,520→01,520 / 02,000→03,000 / 03,520→04,720</span><span class="pass">（与真值一致）</span></div></div></div>
+      <div class="vitem"><div class="ic ok">✓</div><div><div class="tt">SubRip with bitmap</div><div class="dd">SRT 纯时间轴（无文本）+ 每字幕独立 <span class="mono">00001.bmp 466×54 32bit</span></div></div></div>
+      <div class="vitem"><div class="ic ok">✓</div><div><div class="tt">VobSub v7</div><div class="dd">idx 头 v7 模板：<span class="mono">custom colors OFF, tridx 1110, colors 0,0,ffffff,000000</span></div></div></div>
+      <div class="vitem"><div class="ic ok">✓</div><div><div class="tt">.esr v2 工程</div><div class="dd">自包含工程：字幕 3 · filtered 4 · 位图/mask base64 内嵌</div></div></div>
+      <div class="vitem"><div class="ic ok">✓</div><div><div class="tt">字幕管理器</div><div class="dd">list 3 → remove 标记删除 → purge 剩 2 → recover 回 6 · crop / export 通过</div></div></div>
+      <div class="vitem"><div class="ic ok">✓</div><div><div class="tt">Pixel Color 取色</div><div class="dd">frame 30 (640,400) → <span class="mono">rgb[24,52,118]</span></div></div></div>
+      <div class="vitem"><div class="ic ok">✓</div><div><div class="tt">批处理</div><div class="dd">2 文件任务：<span class="mono">0e8927eb5858</span> → status done · 122 候选</div></div></div>
+      <div class="vitem"><div class="ic ok">✓</div><div><div class="tt">Electron 全流程冒烟</div><div class="dd">打开视频(1280) → 预览 → 抓取(3/4) → 管理器删 1 → purge 2 · JS 零报错（仅 CSP 提示）</div></div></div>
+      <div class="vitem"><div class="ic warn">!</div><div><div class="tt">CI 双平台</div><div class="dd">run 36520976982 · Debian job <span class="pass">success</span> · Windows job <span class="pass">success</span> · 资产已上传</div></div></div>
+    </div>
+  </section>
+
+  <!-- ===== 06 发布演进 ===== -->
+  <section class="sec" id="timeline">
+    <div class="sec-head"><span class="sec-no">06</span><h2>发布演进时间轴</h2></div>
+    <p class="sec-desc">2026-09-29 单日内完成逆向 → 重构 → 对齐 → 双平台发布。</p>
+    <div class="card" style="padding:20px 22px">
+      <div class="tl">
+        <div class="t">09:00</div><div class="axis"><span class="dotp"></span></div><div class="c"><span class="tag m">逆向</span><span class="h">esrXP.exe 深度逆向</span><div class="d">pefile + capstone + strings 静态取证，产出逆向分析报告（含第 7 节完整取证地址表）并 push main</div></div>
+        <div class="t">—</div><div class="axis"><span class="dotp"></span></div><div class="c"><span class="tag">重构</span><span class="h">Rust + FFmpeg 9.0 + TDesign + Electron 落地</span><div class="d">CUDA NVDEC → D3D11VA/VAAPI → CPU 回退；GPU/CUDA 像素内核双实现；axum API</div></div>
+        <div class="t">—</div><div class="axis"><span class="dotp"></span></div><div class="c"><span class="tag m">对齐</span><span class="h">功能全部对齐开发</span><div class="d">字幕管理器 / 批处理 / OCR 参数 / SubRip with bitmap / .esr v2 / 预览控制 / 样式全字段 / 取色 / 打开工程 —— 后端 9 文件 +1064/−120 行</div></div>
+        <div class="t">—</div><div class="axis"><span class="dotp"></span></div><div class="c"><span class="tag">验证</span><span class="h">CLI / API / UI 三路端到端</span><div class="d">rip → 3 字幕 + 4 filtered；manager list/remove/purge/recover/crop/export；batch done；Electron 无头全流程冒烟零报错</div></div>
+        <div class="t">12:10</div><div class="axis"><span class="dotp"></span></div><div class="c"><span class="tag g">发布</span><span class="h">v0.2.0 Release</span><div class="d">bump 0.2.0 + CHANGELOG 同步 → push main (12c6938) → tag v0.2.0 → CI 双平台全绿 → Releases 双资产上传</div></div>
+      </div>
+    </div>
+    <div class="chart-box">
+      <h3>发布资产体积对比</h3>
+      <div class="cap">数据源：GitHub Releases v0.2.0 资产（字节换算 MiB）</div>
+      <div id="assetChart" class="ech"></div>
+    </div>
+  </section>
+
+  <!-- ===== 07 发布产物 ===== -->
+  <section class="sec" id="release">
+    <div class="sec-head"><span class="sec-no">07</span><h2>发布产物</h2></div>
+    <p class="sec-desc">GitHub Releases v0.2.0（仓库 LianXia233/esrxp-ng），GitHub Actions 自动编译上传，用户安装零额外依赖（Debian 为 FFmpeg 静态单二进制）。</p>
+    <div class="assets">
+      <div class="asset">
+        <div class="os">Windows 11 · x64</div>
+        <div class="fn">esrxp-ng-0.2.0-win-x64.exe</div>
+        <div class="sz num">134,275,786 B（约 128.0 MiB）</div>
+        <a class="btn" href="https://github.com/LianXia233/esrxp-ng/releases/download/v0.2.0/esrxp-ng-0.2.0-win-x64.exe" target="_blank" rel="noopener">下载 EXE</a>
+      </div>
+      <div class="asset">
+        <div class="os">Debian / Ubuntu · amd64</div>
+        <div class="fn">esrxp_0.2.0_amd64.deb</div>
+        <div class="sz num">84,365,752 B（约 80.5 MiB）</div>
+        <a class="btn" href="https://github.com/LianXia233/esrxp-ng/releases/download/v0.2.0/esrxp_0.2.0_amd64.deb" target="_blank" rel="noopener">下载 DEB</a>
+      </div>
+    </div>
+    <div class="note" style="margin-top:16px"><b>已知限制</b>：.esr 工程以 JSON v2 自包含格式等价实现（非 Delphi 原生二进制）；字幕管理器时间轴手动编辑（单条改 start/end/平移）数据层未实现，Time Shift 全局平移已支持，逐条编辑待下个版本。</div>
+    <div class="note" style="margin-top:12px"><b>验证说明</b>：CUDA/NVDEC 路径因本机无 NVIDIA GPU 未实机验证（自动回退 CPU 通过）；Win11 客户端为 CI 交叉编译产物，建议安装后实机冒烟一次。</div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="mono">esrxp-ng v0.2.0 · <a href="https://github.com/LianXia233/esrxp-ng" target="_blank" rel="noopener">github.com/LianXia233/esrxp-ng</a> · 逆向依据 esrXP beta 10 (20051214)</div>
+    <div style="margin-top:4px">Rust + FFmpeg 9.0 + TDesign Vue3 + Electron · CI: GitHub Actions · 更新日志 CHANGELOG.md 已同步</div>
+  </div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<script>
+(function(){
+  'use strict';
+  // ===== 资产体积柱状图 =====
+  function renderAsset(){
+    var el = document.getElementById('assetChart');
+    if(!el || typeof echarts === 'undefined'){ if(el){ el.textContent='图表库加载失败（资产数据见上方卡片）'; el.style.fontSize='13px'; el.style.color='#5F6672'; } return; }
+    var chart = echarts.init(el);
+    chart.setOption({
+      grid:{left:70,right:24,top:30,bottom:34},
+      tooltip:{trigger:'axis',confine:true,
+        formatter:function(p){ return p[0].name + '<br/>' + p[0].value + ' B（' + (p[0].value/1048576).toFixed(1) + ' MiB）'; }},
+      xAxis:{type:'category',data:['Windows x64 EXE','Debian amd64 DEB'],axisLabel:{fontFamily:'JetBrains Mono,monospace',fontSize:12,color:'#24324D'},axisTick:{show:false},axisLine:{lineStyle:{color:'#C9D2DF'}}},
+      yAxis:{type:'value',name:'字节 (B)',nameTextStyle:{color:'#5F6672',fontSize:11},axisLabel:{fontFamily:'JetBrains Mono,monospace',fontSize:11,color:'#5F6672',formatter:function(v){return (v/1048576).toFixed(0)+'M';}},splitLine:{lineStyle:{color:'#EDF0F5'}}},
+      series:[{type:'bar',barWidth:56,
+        data:[{value:134275786,itemStyle:{color:'#2F6FED',borderRadius:[6,6,0,0]}},{value:84365752,itemStyle:{color:'#E8A33D',borderRadius:[6,6,0,0]}}],
+        label:{show:true,position:'top',fontFamily:'JetBrains Mono,monospace',fontSize:12,color:'#16233B',formatter:function(p){return (p.value/1048576).toFixed(1)+' MiB';}}}]});
+    function resize(){ chart.resize(); }
+    window.addEventListener('resize', resize);
+  }
+  if(document.readyState === 'loading'){ document.addEventListener('DOMContentLoaded', renderAsset); }
+  else { renderAsset(); }
+})();
+</script>
