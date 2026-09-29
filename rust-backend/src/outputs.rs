@@ -315,20 +315,27 @@ pub fn write_vobsub(events: &[SubtitleEvent], video_w: usize, video_h: usize,
     let sub_path = out_stem.with_extension("sub");
     fs::write(&sub_path, &sub)?;
 
+    // 对齐 esrXP 逆向取证：VobSub v7 模板 + 注释 + 16 项 YUV 调色板
     let mut idx = String::new();
-    idx.push_str("v8\n# VobSub index file, v8 (do not modify this line!)\n");
+    idx.push_str("# VobSub index file, v7 (do not modify this line!)\n");
     idx.push_str(&format!("size: {video_w}x{video_h}\norg: 0, 0\nscale: 100%, 100%\n"));
     idx.push_str("smooth: OFF\nfade: 0, 0\nalign: 0, 0\ntime offset: 0\nforced subs: OFF\n");
+    idx.push_str("# Custom colors (transp idxs and the four colors)\n");
+    idx.push_str("custom colors: OFF, tridx: 1110, colors: 0, 0, ffffff, 000000\n");
     let mut pal = Vec::new();
-    for c in [outline, main] {
+    for c in [outline, main, (255u8, 255u8, 255u8), (0u8, 0u8, 0u8)] {
         let (y, u, v) = rgb_to_yuv(c);
         pal.push(format!("{y:02x}{u:02x}{v:02x}"));
     }
     while pal.len() < 16 {
         pal.push("000000".to_string());
     }
+    idx.push_str("# The original palette of the DVD in PGC#1\n");
     idx.push_str(&format!("palette: {}\n", pal.join(", ")));
-    idx.push_str("langidx: 0\nid: en, index: 0\n");
+    idx.push_str("langidx: 0\n");
+    idx.push_str("# Decomment next line to activate alternative name in DirectVobSub / Windows Media Player 6.x\n");
+    idx.push_str("# Force subtitle placement relative to (org.x, org.y)\n");
+    idx.push_str("id: en, index: 0\n");
     for (start, _end, off) in &offsets {
         idx.push_str(&format!("timestamp: {}, filepos: {:09x}\n", vobsub_time(*start), off));
     }
@@ -389,37 +396,175 @@ fn encode_vobsub_frame(ev: &SubtitleEvent, main: (u8, u8, u8), outline: (u8, u8,
 }
 
 // ---------------------------------------------------------------- OCR PNG
+/// OCR 影像：白底黑字 PNG（对齐 esrXP [FOCRImage]：
+/// Subtitle Per Image（每图字幕数）/ Scale Subtitle（放大）/ Divid 2 lines（拆两行））。
 pub fn write_ocr_png(events: &[SubtitleEvent], cfg: &AppConfig, out_dir: &Path) -> Result<Vec<String>> {
-    let scale = cfg.output.ocr.scale.max(0.1);
+    let ocr = &cfg.output.ocr;
+    let scale = ocr.scale.max(0.1);
+    let per_image = ocr.per_image.max(1) as usize;
     fs::create_dir_all(out_dir)?;
+    let mut files = Vec::new();
+    let mut img_idx = 0usize;
+    let mut i = 0usize;
+    while i < events.len() {
+        let batch: Vec<&SubtitleEvent> = events[i..(i + per_image).min(events.len())]
+            .iter().filter(|ev| !ev.mask.is_empty() && ev.mask.iter().any(|v| *v > 0))
+            .collect();
+        if batch.is_empty() {
+            i += per_image;
+            continue;
+        }
+        img_idx += 1;
+        let gap = 4u32;
+        let total_w = batch.iter().fold(gap, |acc, ev| {
+            acc + (ev.image_w as f64 * scale).round() as u32 + gap
+        });
+        let max_h = batch.iter().map(|ev| {
+            (ev.image_h as f64 * scale).round() as u32
+        }).max().unwrap_or(1);
+        let mut img = image::RgbaImage::new(total_w.max(1), max_h.max(1));
+        for p in img.pixels_mut() {
+            *p = image::Rgba([255, 255, 255, 255]);
+        }
+        let mut cx = gap;
+        for ev in batch {
+            let (w, h) = (ev.image_w, ev.image_h);
+            let nw = (w as f64 * scale).round() as u32;
+            let nh = (h as f64 * scale).round() as u32;
+            for y in 0..nh {
+                for x in 0..nw {
+                    let sx = ((x as f64) / scale).floor() as usize;
+                    let sy = ((y as f64) / scale).floor() as usize;
+                    let si = sy.min(h - 1) * w + sx.min(w - 1);
+                    let px = if ev.mask[si] > 0 {
+                        image::Rgba([0, 0, 0, 255])
+                    } else {
+                        image::Rgba([255, 255, 255, 255])
+                    };
+                    img.put_pixel(cx + x, y, px);
+                }
+            }
+            cx += nw + gap;
+        }
+        // Divid each subtitle into 2 lines：若存在整行空白带（两行字幕），拆成上下两张
+        let p = out_dir.join(format!("subtitle_{:04}.png", img_idx));
+        if ocr.divid_into_2_lines && max_h >= 12 {
+            if let Some(split_y) = find_blank_split(&img) {
+                let (top, bottom) = split_vertical(&img, split_y);
+                let pt = out_dir.join(format!("subtitle_{:04}_top.png", img_idx));
+                let pb = out_dir.join(format!("subtitle_{:04}_bottom.png", img_idx));
+                top.save(&pt)?;
+                bottom.save(&pb)?;
+                files.push(pt.display().to_string());
+                files.push(pb.display().to_string());
+                i += per_image;
+                continue;
+            }
+        }
+        img.save(&p)?;
+        files.push(p.display().to_string());
+        i += per_image;
+    }
+    Ok(files)
+}
+
+/// 找整行全白（空白）横带；返回中心 y（用于拆两行）。找不到返回 None。
+fn find_blank_split(img: &image::RgbaImage) -> Option<u32> {
+    let (w, h) = (img.width(), img.height());
+    let mut blank_rows: Vec<u32> = Vec::new();
+    for y in 0..h {
+        let mut blank = true;
+        for x in 0..w {
+            let p = img.get_pixel(x, y);
+            if p[0] < 240 || p[1] < 240 || p[2] < 240 {
+                blank = false;
+                break;
+            }
+        }
+        if blank {
+            blank_rows.push(y);
+        }
+    }
+    if blank_rows.len() < 3 {
+        return None;
+    }
+    // 找最宽的连续空白带，中心位于全图 30%~70%（两行字幕的中缝）
+    let mut best_len = 0usize;
+    let mut best_start = 0u32;
+    let mut i = 0usize;
+    while i < blank_rows.len() {
+        let mut j = i;
+        while j + 1 < blank_rows.len() && blank_rows[j + 1] == blank_rows[j] + 1 {
+            j += 1;
+        }
+        let len = j - i + 1;
+        if len > best_len {
+            best_len = len;
+            best_start = blank_rows[i];
+        }
+        i = j + 1;
+    }
+    let mid = best_start + best_len as u32 / 2;
+    if mid > h / 4 && mid < h * 3 / 4 {
+        Some(mid)
+    } else {
+        None
+    }
+}
+
+fn split_vertical(img: &image::RgbaImage, y: u32) -> (image::RgbaImage, image::RgbaImage) {
+    let (w, h) = (img.width(), img.height());
+    let mut top = image::RgbaImage::new(w, y.max(1));
+    let mut bottom = image::RgbaImage::new(w, h.saturating_sub(y).max(1));
+    for p in top.pixels_mut() {
+        *p = image::Rgba([255, 255, 255, 255]);
+    }
+    for p in bottom.pixels_mut() {
+        *p = image::Rgba([255, 255, 255, 255]);
+    }
+    for yy in 0..y.max(1) {
+        for x in 0..w {
+            *top.get_pixel_mut(x, yy) = *img.get_pixel(x, yy);
+        }
+    }
+    for yy in 0..h.saturating_sub(y).max(1) {
+        for x in 0..w {
+            *bottom.get_pixel_mut(x, yy) = *img.get_pixel(x, y + yy);
+        }
+    }
+    (top, bottom)
+}
+
+/// SRT + 位图（对齐 esrXP "SubRip with bitmap"）：写出纯时间轴 SRT，
+/// 同时每字幕输出独立 .bmp（白底黑字，对应时间区间，不含文本）。
+pub fn write_srt_bitmap(events: &[SubtitleEvent], cfg: &AppConfig, out: &Path) -> Result<(String, Vec<String>)> {
+    write_srt(events, cfg, out)?;
+    let stem = out.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "subs".into());
+    let dir = out.parent().unwrap_or_else(|| Path::new(".")).join(format!("{stem}_subs"));
+    fs::create_dir_all(&dir)?;
     let mut files = Vec::new();
     for (i, ev) in events.iter().enumerate() {
         if ev.mask.is_empty() || !ev.mask.iter().any(|v| *v > 0) {
             continue;
         }
-        // 白底黑字
         let (w, h) = (ev.image_w, ev.image_h);
-        let nw = (w as f64 * scale).round() as u32;
-        let nh = (h as f64 * scale).round() as u32;
-        let mut img = image::RgbaImage::new(nw.max(1), nh.max(1));
-        for y in 0..nh {
-            for x in 0..nw {
-                let sx = ((x as f64) / scale).floor() as usize;
-                let sy = ((y as f64) / scale).floor() as usize;
-                let si = sy * w + sx;
+        let mut img = image::RgbaImage::new(w.max(1) as u32, h.max(1) as u32);
+        for y in 0..h {
+            for x in 0..w {
+                let si = y * w + x;
                 let px = if ev.mask[si] > 0 {
                     image::Rgba([0, 0, 0, 255])
                 } else {
                     image::Rgba([255, 255, 255, 255])
                 };
-                img.put_pixel(x, y, px);
+                img.put_pixel(x as u32, y as u32, px);
             }
         }
-        let p = out_dir.join(format!("subtitle_{:04}.png", i + 1));
+        let p = dir.join(format!("{:05}.bmp", i + 1));
         img.save(&p)?;
         files.push(p.display().to_string());
     }
-    Ok(files)
+    Ok((dir.display().to_string(), files))
 }
 
 // ---------------------------------------------------------------- JSON
@@ -446,18 +591,130 @@ pub fn write_json_timeline(events: &[SubtitleEvent], video_info: &serde_json::Va
 
 pub fn write_project(events: &[SubtitleEvent], video_path: &str, cfg: &AppConfig,
                      out: &Path, artifacts: &serde_json::Value) -> Result<()> {
+    write_esr(events, &[], video_path, cfg, out, artifacts)
+}
+
+/// .esr 工程文件（对齐 esrXP Save As .esr）：完整保存配置、字幕（含位图与
+/// 删除标记）、被过滤候选，供字幕管理器打开/编辑/重导出。
+pub fn write_esr(events: &[SubtitleEvent], filtered: &[SubtitleEvent], video_path: &str,
+                 cfg: &AppConfig, out: &Path, artifacts: &serde_json::Value) -> Result<()> {
     let subs: Vec<serde_json::Value> = events.iter().enumerate().map(|(i, ev)| {
-        json!({
-            "index": i + 1, "start": ev.start, "end": ev.end,
-            "start_frame": ev.start_frame, "end_frame": ev.end_frame,
-            "bbox": ev.bbox,
-        })
+        ev_to_json(ev, i + 1)
+    }).collect();
+    let flt: Vec<serde_json::Value> = filtered.iter().enumerate().map(|(i, ev)| {
+        ev_to_json(ev, i + 1)
     }).collect();
     let data = json!({
-        "format": "esrxp-ng/project", "version": 1,
+        "format": "esrxp-ng/project", "version": 2,
         "video": video_path, "config": serde_json::to_value(cfg).unwrap_or(json!({})),
-        "artifacts": artifacts, "subtitles": subs,
+        "artifacts": artifacts, "filtered": flt, "subtitles": subs,
     });
     fs::write(out, serde_json::to_string_pretty(&data)?)?;
     Ok(())
+}
+
+fn ev_to_json(ev: &SubtitleEvent, index: usize) -> serde_json::Value {
+    json!({
+        "index": index, "start": ev.start, "end": ev.end,
+        "start_frame": ev.start_frame, "end_frame": ev.end_frame,
+        "bbox": ev.bbox, "roi_origin": ev.roi_origin,
+        "roi_w": ev.roi_w, "roi_h": ev.roi_h,
+        "image_w": ev.image_w, "image_h": ev.image_h,
+        "diff_frames": ev.diff_frames, "source_frame": ev.source_frame,
+        "deleted": ev.deleted,
+        "image_b64": base64_encode(&ev.image),
+        "mask_b64": base64_encode(&ev.mask),
+        "roi_mask_b64": base64_encode(&ev.roi_mask),
+    })
+}
+
+/// 读取 .esr 工程（v1/v2 兼容），返回 (events, filtered, video_path, config)。
+pub fn load_esr(path: &Path) -> Result<(Vec<SubtitleEvent>, Vec<SubtitleEvent>, String, AppConfig)> {
+    let data: serde_json::Value = serde_json::from_str(&fs::read_to_string(path)?)?;
+    let video = data["video"].as_str().unwrap_or("").to_string();
+    let cfg: AppConfig = serde_json::from_value(data["config"].clone()).unwrap_or_default();
+    let mut events = Vec::new();
+    for s in data["subtitles"].as_array().cloned().unwrap_or_default() {
+        let ev = json_to_ev(&s);
+        events.push(ev);
+    }
+    let mut filtered = Vec::new();
+    for s in data["filtered"].as_array().cloned().unwrap_or_default() {
+        filtered.push(json_to_ev(&s));
+    }
+    Ok((events, filtered, video, cfg))
+}
+
+fn json_to_ev(s: &serde_json::Value) -> SubtitleEvent {
+    let get = |k: &str, d: i64| s.get(k).and_then(|v| v.as_i64()).unwrap_or(d);
+    let arr = |k: &str, i: usize| s.get(k)
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.get(i))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let image = base64_decode(s.get("image_b64").and_then(|v| v.as_str()).unwrap_or(""));
+    let mask = base64_decode(s.get("mask_b64").and_then(|v| v.as_str()).unwrap_or(""));
+    let roi_mask = base64_decode(s.get("roi_mask_b64").and_then(|v| v.as_str()).unwrap_or(""));
+    SubtitleEvent {
+        start: s.get("start").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        end: s.get("end").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        start_frame: get("start_frame", 0),
+        end_frame: get("end_frame", 0),
+        image, mask, roi_mask,
+        image_w: get("image_w", 0) as usize,
+        image_h: get("image_h", 0) as usize,
+        roi_w: get("roi_w", 0) as usize,
+        roi_h: get("roi_h", 0) as usize,
+        bbox: (arr("bbox", 0), arr("bbox", 1), arr("bbox", 2), arr("bbox", 3)),
+        roi_origin: (arr("roi_origin", 0), arr("roi_origin", 1)),
+        diff_frames: get("diff_frames", 0),
+        source_frame: get("source_frame", 0),
+        deleted: s.get("deleted").and_then(|v| v.as_bool()).unwrap_or(false),
+    }
+}
+
+// 极小 base64（无第三方依赖）
+const B64: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+fn base64_encode(data: &[u8]) -> String {
+    let mut out = String::new();
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(B64[(n >> 18) as usize & 63] as char);
+        out.push(B64[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { B64[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { B64[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+fn base64_decode(s: &str) -> Vec<u8> {
+    fn val(c: u8) -> u8 {
+        match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => 0,
+        }
+    }
+    let bytes: Vec<u8> = s.bytes().filter(|b| *b != b'=' && *b != b'\n' && *b != b'\r').collect();
+    let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
+    for chunk in bytes.chunks(4) {
+        let n = (val(chunk[0]) as u32) << 18
+            | (chunk.get(1).map(|c| val(*c)).unwrap_or(0) as u32) << 12
+            | (chunk.get(2).map(|c| val(*c)).unwrap_or(0) as u32) << 6
+            | (chunk.get(3).map(|c| val(*c)).unwrap_or(0) as u32);
+        out.push((n >> 16) as u8);
+        if chunk.len() > 2 {
+            out.push((n >> 8) as u8);
+        }
+        if chunk.len() > 3 {
+            out.push(n as u8);
+        }
+    }
+    out
 }

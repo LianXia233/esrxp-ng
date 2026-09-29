@@ -59,6 +59,10 @@
         <t-button theme="primary" @click="openVideo" :loading="opening">打开视频</t-button>
         <t-button v-if="hasElectron" theme="outline" @click="pickVideo">浏览…</t-button>
       </div>
+      <div class="row" style="margin-top:8px;">
+        <t-input :model-value="projectOpenPath" placeholder="打开 .esr 工程文件路径" clearable style="min-width:360px;flex:1" @change="v=>projectOpenPath=v"></t-input>
+        <t-button variant="outline" @click="openProject" :disabled="!projectOpenPath.trim()">打开工程</t-button>
+      </div>
       <div class="meta-tags" v-if="vinfo">
         <t-tag theme="primary" variant="light">{{vinfo.width}} × {{vinfo.height}}</t-tag>
         <t-tag theme="success" variant="light">{{vinfo.fps.toFixed(2)}} fps</t-tag>
@@ -149,9 +153,30 @@
             <t-checkbox :checked="cfg.output.json_timeline" @change="v=>set('output.json_timeline',v)">时间轴 JSON</t-checkbox>
             <div class="field"><label>最大字幕宽度</label>
               <t-input-number :value="cfg.output.max_subtitle_width" :min="10" :max="4000" @change="v=>set('output.max_subtitle_width',v)"></t-input-number></div>
+            <t-checkbox :checked="cfg.output.srt_bitmap" @change="v=>set('output.srt_bitmap',v)">SRT 带位图（SubRip with bitmap）</t-checkbox>
+            <div class="field"><label>OCR 每图字幕数 (per_image)</label>
+              <t-input-number :value="cfg.output.ocr.per_image" :min="1" :max="20" @change="v=>set('output.ocr.per_image',v)"></t-input-number></div>
+            <div class="field"><label>OCR 放大 (scale)</label>
+              <t-input-number :value="cfg.output.ocr.scale" :min="0.1" :max="8" :step="0.1" @change="v=>set('output.ocr.scale',v)"></t-input-number></div>
+            <t-checkbox :checked="cfg.output.ocr.divid_into_2_lines" @change="v=>set('output.ocr.divid_into_2_lines',v)">每字幕拆 2 行</t-checkbox>
             <div class="field"><label>SSA 字体</label>
               <t-input :value="cfg.style.font_name" placeholder="Arial" @change="v=>set('style.font_name',v)"></t-input></div>
             <t-checkbox :checked="cfg.style.no_default_style" @change="v=>set('style.no_default_style',v)">不使用默认样式</t-checkbox>
+            <t-checkbox :checked="cfg.style.unicode" @change="v=>set('style.unicode',v)">Unicode 输出</t-checkbox>
+            <div class="field"><label>时间平移 (Time Shift, 10ms)</label>
+              <t-input-number :value="cfg.style.time_shift_10ms" :min="-5000" :max="5000" @change="v=>set('style.time_shift_10ms',v)"></t-input-number></div>
+            <div class="field"><label>主色 Primary (ASS &H AABBGGRR&)</label>
+              <t-input :value="cfg.style.primary_color" placeholder="&H00FFFFFF&" @change="v=>set('style.primary_color',v)"></t-input></div>
+            <div class="field"><label>次色 Secondary</label>
+              <t-input :value="cfg.style.secondary_color" placeholder="&H000000FF&" @change="v=>set('style.secondary_color',v)"></t-input></div>
+            <div class="field"><label>描边 Outline</label>
+              <t-input :value="cfg.style.outline_color_ssa" placeholder="&H00000000&" @change="v=>set('style.outline_color_ssa',v)"></t-input></div>
+            <div class="field"><label>阴影 Shadow</label>
+              <t-input :value="cfg.style.shadow_color" placeholder="&H00000000&" @change="v=>set('style.shadow_color',v)"></t-input></div>
+            <div class="field"><label>描边宽度 (Outline)</label>
+              <t-input-number :value="cfg.style.outline_width" :min="0" :max="10" @change="v=>set('style.outline_width',v)"></t-input-number></div>
+            <div class="field"><label>阴影深度 (Shadow)</label>
+              <t-input-number :value="cfg.style.shadow_depth" :min="0" :max="10" @change="v=>set('style.shadow_depth',v)"></t-input-number></div>
           </div>
         </t-tab-panel>
       </t-tabs>
@@ -166,6 +191,19 @@
         <t-switch v-model="regionOnly" size="small"></t-switch>
         <span style="font-size:12px;color:#5f6672">仅 ROI 区域</span>
         <t-button v-if="previewUrl" theme="danger" variant="outline" size="small" @click="clearSel">清除选区</t-button>
+        <t-button v-if="previewUrl" theme="warning" variant="outline" size="small" @click="pickSubtitleColor">取主色</t-button>
+        <t-button v-if="previewUrl" theme="warning" variant="outline" size="small" @click="pickOutlineColor">取描边色</t-button>
+        <span style="font-size:12px;color:#5f6672">（点击预览图第一栏取色，Alt+点击取描边色）</span>
+      </div>
+      <div class="row" style="margin-bottom:10px;gap:16px;">
+        <div class="field"><label>Scale Video（整帧缩放）</label>
+          <t-input-number :value="cfg.preview.scale_video" :min="0.1" :max="4" :step="0.1" @change="v=>set('preview.scale_video',v)"></t-input-number></div>
+        <div class="field"><label>Sharpen Video（锐化）</label>
+          <t-switch :value="cfg.preview.sharpen_video" @change="v=>set('preview.sharpen_video',v)"></t-switch></div>
+        <div class="field"><label>White Background（白背景）</label>
+          <t-switch :value="cfg.preview.white_background" @change="v=>set('preview.white_background',v)"></t-switch></div>
+        <div class="field"><label>Slow Speed（慢速倍率）</label>
+          <t-input-number :value="cfg.preview.slow_speed" :min="0.1" :max="10" :step="0.1" @change="v=>set('preview.slow_speed',v)"></t-input-number></div>
       </div>
       <div class="preview-box">
         <div class="preview-wrap" v-if="previewUrl" ref="pw">
@@ -193,6 +231,29 @@
       <div class="log-box" v-if="job && job.log.length">{{ job.log.join('\n') }}</div>
     </div>
 
+    <!-- 4.5 批处理 -->
+    <div class="card">
+      <h2><span class="step">B</span>批处理（Batch Processing）</h2>
+      <div class="row" style="margin-bottom:10px;">
+        <t-input :model-value="batchFilesText" placeholder="多个视频路径，每行一个（或逗号分隔）" clearable style="flex:1;min-width:420px" @change="v=>batchFilesText=v"></t-input>
+        <t-button v-if="hasElectron" theme="outline" @click="pickBatchFiles">添加文件…</t-button>
+        <t-button theme="primary" @click="startBatch" :loading="batchRunning" :disabled="!batchFilesText.trim()">开始批处理</t-button>
+      </div>
+      <div v-if="batchJob && batchJob.subs.length" style="margin-top:8px;">
+        <table class="artifact-table">
+          <thead><tr><th>文件</th><th>状态</th><th>进度</th><th>字幕数</th></tr></thead>
+          <tbody>
+            <tr v-for="sb in batchJob.subs" :key="sb.id">
+              <td style="font-family:Consolas,monospace;font-size:12px">{{sb.file}}</td>
+              <td><t-tag :theme="sb.status==='done'?'success':(sb.status==='error'?'danger':'default')" variant="light">{{sb.status}}</t-tag></td>
+              <td><t-progress :percentage="(sb.progress||{}).pct||0" :label="false" style="min-width:120px"></t-progress></td>
+              <td>{{sb.status==='done' && sb.result ? sb.result.events.length : '-'}}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <!-- 5. 产物 -->
     <div class="card" v-if="artifacts.length">
       <h2><span class="step">5</span>提取产物</h2>
@@ -206,18 +267,37 @@
           </tr>
         </tbody>
       </table>
-      <div v-if="subtitleEvents.length" style="margin-top:14px;">
-        <div style="font-size:12px;color:#5f6672;margin-bottom:8px;">检测到 {{subtitleEvents.length}} 条字幕</div>
+      <div v-if="projectPath" style="margin-top:12px;">
+        <div class="flex-between" style="margin-bottom:8px;">
+          <div style="font-size:12px;color:#5f6672;">工程：{{projectPath}} · 字幕 {{subtitleEvents.length}} 条 · 被过滤 {{filteredEvents.length}} 条</div>
+          <div class="row" style="gap:8px;">
+            <t-button theme="outline" size="small" @click="recoverFiltered">恢复被过滤</t-button>
+            <t-button theme="outline" size="small" @click="removeSelected">标记删除选中</t-button>
+            <t-button theme="outline" size="small" @click="purgeDeleted">清除已删</t-button>
+            <t-button theme="outline" size="small" @click="cropSelected">裁剪选中</t-button>
+            <t-button theme="primary" size="small" @click="exportManager">重新导出</t-button>
+          </div>
+        </div>
+        <div class="row" style="gap:14px;margin-bottom:8px;">
+          <t-radio-group :value="managerView" @change="v=>managerView=v">
+            <t-radio-button value="all">全部</t-radio-button>
+            <t-radio-button value="hide">隐藏已删</t-radio-button>
+            <t-radio-button value="deleted">仅已删</t-radio-button>
+          </t-radio-group>
+          <t-checkbox :checked="selectAll" @change="v=>toggleSelectAll(v)">全选</t-checkbox>
+        </div>
         <table class="artifact-table">
-          <thead><tr><th>#</th><th>开始</th><th>结束</th><th>时长</th><th>bbox (x,y,w,h)</th><th>变化帧</th></tr></thead>
+          <thead><tr><th></th><th>#</th><th>开始</th><th>结束</th><th>时长</th><th>bbox (x,y,w,h)</th><th>变化帧</th><th>状态</th></tr></thead>
           <tbody>
-            <tr v-for="e in subtitleEvents" :key="e.index">
+            <tr v-for="e in visibleManagerEvents" :key="e.index" :style="e.deleted?'opacity:.5;text-decoration:line-through':''">
+              <td><t-checkbox :checked="e.selected" @change="v=>toggleSelect(e.index,v)"></t-checkbox></td>
               <td>{{e.index}}</td>
               <td>{{e.start.toFixed(2)}}s</td>
               <td>{{e.end.toFixed(2)}}s</td>
-              <td>{{e.duration.toFixed(2)}}s</td>
+              <td>{{(e.end - e.start).toFixed(2)}}s</td>
               <td style="font-family:Consolas,monospace;font-size:12px">{{e.bbox.join(', ')}}</td>
               <td>{{e.diff_frames}}</td>
+              <td><t-tag v-if="e.deleted" theme="danger" variant="light">已删</t-tag><t-tag v-else theme="success" variant="light">保留</t-tag></td>
             </tr>
           </tbody>
         </table>
@@ -256,13 +336,29 @@ const app = createApp({
         region: { up: 0, down: 0, left: 0, right: 0, scale: 1.0, sharpen: false },
         filter: { method: 'color_outline', subtitle_color: [255,255,255], outline_color: [0,0,0], pixel_compensate: 1, enable_filter: true, additional_colors: [] },
         postprocess: { single_dot: true, single_line: true, large_block: 0, touch_edge: false, pass_center: true, center_tolerance: 0.12 },
-        output: { ssa: true, vobsub: true, ocr_png: true, srt: true, json_timeline: true, max_subtitle_width: 720 },
-        style: { font_name: 'Arial', no_default_style: false },
+        output: { ssa: true, vobsub: true, ocr_png: true, srt: true, srt_bitmap: false, json_timeline: true,
+                  ocr: { per_image: 1, scale: 1.0, divid_into_2_lines: false }, max_subtitle_width: 720 },
+        style: { unicode: true, time_shift_10ms: 0, outline_width: 1, shadow_depth: 0,
+                 primary_color: '&H00FFFFFF&', secondary_color: '&H000000FF&',
+                 outline_color_ssa: '&H00000000&', shadow_color: '&H00000000&',
+                 font_name: 'Arial', no_default_style: false },
+        preview: { scale_video: 1.0, sharpen_video: false, white_background: false, slow_speed: 1.0 },
         start_seconds: 0, end_seconds: 0, verbose: false,
       },
       sel: null,
       selDragging: false,
       selStart: null,
+      projectPath: '',
+      filteredEvents: [],
+      managerView: 'hide',
+      selectAll: false,
+      managerEvents: [],
+      projectOpenPath: '',
+      batchFilesText: '',
+      batchJob: null,
+      batchTimer: null,
+      batchRunning: false,
+      picking: null,
     };
   },
   computed: {
@@ -274,6 +370,14 @@ const app = createApp({
     selStyle() {
       if (!this.sel) return {};
       return { left: this.sel.x + 'px', top: this.sel.y + 'px', width: this.sel.w + 'px', height: this.sel.h + 'px' };
+    },
+    visibleManagerEvents() {
+      const v = this.managerView;
+      return this.managerEvents.filter(e => {
+        if (v === 'hide' && e.deleted) return false;
+        if (v === 'deleted' && !e.deleted) return false;
+        return true;
+      });
     },
     additionalColorsText() {
       return (this.cfg.filter.additional_colors || []).map(c => this.rgbToHex(c)).join(',');
@@ -432,6 +536,9 @@ const app = createApp({
           if (j.status === 'error') { this.$message.error('抓取失败：' + (j.log || []).join('\n')); return; }
           this.$message.success('抓取完成');
           if (j.result) {
+            this.projectPath = j.result.project || '';
+            this.filteredEvents = j.result.filtered || [];
+            this.$nextTick(() => this.loadManager());
             const arts = j.result.artifacts || {};
             this.artifacts = Object.entries(arts).map(([k, path]) => {
               if (k === 'ocr_images') return { kind: 'png', name: k, path };
@@ -447,6 +554,114 @@ const app = createApp({
     },
     async pickVideo() { const p = await window.esrxp.selectVideo(); if (p) { this.videoPath = p; this.openVideo(); } },
     async pickOutDir() { const p = await window.esrxp.selectOutDir(); if (p) this.outDir = p; },
+    async pickBatchFiles() { const p = await window.esrxp.selectVideo(); if (p) this.batchFilesText = (this.batchFilesText ? this.batchFilesText + '\n' : '') + p; },
+    // ---- Pixel Color 取色（对齐 esrXP Pixel Color）
+    pickSubtitleColor() { this.pickPixel(true); },
+    pickOutlineColor() { this.pickPixel(false); },
+    async pickPixel(isMain) {
+      if (!this.previewUrl || !this.vinfo) { this.$message.warning('请先预览一帧'); return; }
+      this.$message.info('点击预览图第一栏（原图）选取像素颜色');
+      this.picking = isMain;
+    },
+    // 预览图点击取色（委托在 mounted 的 pointerup 里统一处理）
+    async fetchPixel(frame, x, y) {
+      const r = await this.api('/api/pixel', { path: this.videoPath, frame, x, y });
+      return r;
+    },
+    // ---- 字幕管理器
+    async loadManager() {
+      if (!this.projectPath) return;
+      try {
+        const r = await this.api('/api/manager/list', { project: this.projectPath });
+        this.managerEvents = (r.subtitles || []).map(e => ({ ...e, selected: false }));
+        this.filteredEvents = r.filtered || [];
+      } catch (e) { this.$message.error(e.message); }
+    },
+    toggleSelect(idx, v) { const e = this.managerEvents.find(x => x.index === idx); if (e) e.selected = v; },
+    toggleSelectAll(v) {
+      this.selectAll = v;
+      for (const e of this.visibleManagerEvents) e.selected = v;
+    },
+    selectedIndexes() { return this.managerEvents.filter(e => e.selected).map(e => e.index - 1); },
+    async recoverFiltered() {
+      try {
+        const r = await this.api('/api/manager/recover', { project: this.projectPath });
+        this.managerEvents = (r.subtitles || []).map(e => ({ ...e, selected: false }));
+        this.filteredEvents = [];
+        this.$message.success('已恢复被过滤候选，共 ' + r.count + ' 条');
+      } catch (e) { this.$message.error(e.message); }
+    },
+    async removeSelected() {
+      const idxs = this.selectedIndexes();
+      if (!idxs.length) { this.$message.warning('请先勾选要删除的字幕'); return; }
+      try {
+        const r = await this.api('/api/manager/remove', { project: this.projectPath, indexes: idxs });
+        this.managerEvents = (r.subtitles || []).map(e => ({ ...e, selected: false }));
+        this.$message.success('已标记删除 ' + idxs.length + ' 条');
+      } catch (e) { this.$message.error(e.message); }
+    },
+    async purgeDeleted() {
+      try {
+        const r = await this.api('/api/manager/purge', { project: this.projectPath });
+        this.managerEvents = (r.subtitles || []).map(e => ({ ...e, selected: false }));
+        this.$message.success('已清除已删除字幕，剩余 ' + r.count + ' 条');
+      } catch (e) { this.$message.error(e.message); }
+    },
+    async cropSelected() {
+      const idxs = this.selectedIndexes();
+      if (!idxs.length) { this.$message.warning('请先勾选要裁剪的字幕'); return; }
+      try {
+        const r = await this.api('/api/manager/crop', { project: this.projectPath, indexes: idxs });
+        this.managerEvents = (r.subtitles || []).map(e => ({ ...e, selected: false }));
+        this.$message.success('裁剪完成');
+      } catch (e) { this.$message.error(e.message); }
+    },
+    async exportManager() {
+      try {
+        const r = await this.api('/api/manager/export', { project: this.projectPath });
+        this.$message.success('已重新导出 ' + Object.keys(r.artifacts || {}).length + ' 个产物');
+      } catch (e) { this.$message.error(e.message); }
+    },
+    async openProject() {
+      if (!this.projectOpenPath.trim()) return;
+      try {
+        const r = await this.api('/api/project/open', { path: this.projectOpenPath.trim() });
+        this.projectPath = this.projectOpenPath.trim();
+        this.videoPath = r.video || this.videoPath;
+        this.outDir = r.out_dir || this.outDir;
+        this.cfg = r.config || this.cfg;
+        this.managerEvents = (r.subtitles || []).map(e => ({ ...e, selected: false }));
+        this.filteredEvents = r.filtered || [];
+        this.subtitleEvents = r.subtitles || [];
+        if (this.videoPath) { try { this.vinfo = await this.api('/api/video/open', { path: this.videoPath }); } catch (e) {} }
+        this.$message.success('工程已打开：' + r.count + ' 条字幕');
+      } catch (e) { this.$message.error(e.message); }
+    },
+    // ---- 批处理
+    async startBatch() {
+      const files = this.batchFilesText.split(/[\n,;]/).map(s => s.trim()).filter(Boolean);
+      if (!files.length) { this.$message.warning('请先填写视频路径'); return; }
+      this.batchRunning = true;
+      this.batchJob = null;
+      try {
+        const r = await this.api('/api/batch', { files, out_dir: this.outDir || '', config: this.cfg });
+        this.batchJob = { id: r.batch_id, status: 'running', subs: [] };
+        this.batchTimer = setInterval(() => this.pollBatch(), 1200);
+        this.$message.success('批处理已启动，共 ' + files.length + ' 个文件');
+      } catch (e) { this.$message.error(e.message); this.batchRunning = false; }
+    },
+    async pollBatch() {
+      try {
+        const r = await this.api('/api/batch/' + this.batchJob.id);
+        this.batchJob = r;
+        const allDone = r.subs.every(s => s.status === 'done' || s.status === 'error');
+        if (allDone) {
+          clearInterval(this.batchTimer);
+          this.batchRunning = false;
+          this.$message.success('批处理完成');
+        }
+      } catch (e) { clearInterval(this.batchTimer); this.batchRunning = false; }
+    },
   },
   async mounted() {
     window.__vm = this; // 自动化/调试钩子
@@ -460,7 +675,26 @@ const app = createApp({
         if (e.target && e.target.closest && e.target.closest('.preview-wrap')) this.onSelDown(e);
       });
       window.addEventListener('pointermove', (e) => this.onSelMove(e));
-      window.addEventListener('pointerup', () => this.onSelUp());
+      window.addEventListener('pointerup', (e) => {
+        this.onSelUp();
+        if (this.picking && e.target && e.target.closest && e.target.closest('.preview-wrap') && this.$refs.pimg) {
+          const img = this.$refs.pimg;
+          const rect = img.getBoundingClientRect();
+          const px = e.clientX - rect.left, py = e.clientY - rect.top;
+          if (px >= 0 && px <= rect.width / 3 && py >= 0 && py <= rect.height) {
+            const scaleX = this.vinfo.width / (rect.width / 3);
+            const scaleY = this.vinfo.height / rect.height;
+            const vx = Math.round(px * scaleX), vy = Math.round(py * scaleY);
+            this.fetchPixel(this.previewFrame, vx, vy).then(r => {
+              const isMain = this.picking === true;
+              this.set('filter.subtitle_color', r.rgb);
+              if (!isMain) this.set('filter.outline_color', r.rgb);
+              this.$message.success('已取色 RGB(' + r.rgb.join(',') + ') → ' + (isMain ? '字幕主色' : '描边色'));
+              this.picking = null;
+            }).catch(err => { this.$message.error(err.message); this.picking = null; });
+          }
+        }
+      });
     });
   },
 });

@@ -98,7 +98,7 @@ fn cmd_dbg(args: &[String]) -> Result<()> {
     Ok(())
 }
 
-fn cmd_rip(args: &[String]) -> Result<()> {
+pub fn cmd_rip(args: &[String]) -> Result<()> {
     let video = args.first().cloned().ok_or_else(|| anyhow::anyhow!("缺少视频路径"))?;
     let out = parse_flag(args, "--out").unwrap_or_else(|| "out".into());
     let config_path = parse_flag(args, "--config");
@@ -119,45 +119,13 @@ fn cmd_rip(args: &[String]) -> Result<()> {
 
     let out_dir = PathBuf::from(&out);
     std::fs::create_dir_all(&out_dir)?;
-    let src = PathBuf::from(&video)
-        .file_stem().map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "subtitle".into());
-    let vinfo = &res.video_info;
-    let (vw, vh) = (
-        vinfo["width"].as_u64().unwrap_or(0) as usize,
-        vinfo["height"].as_u64().unwrap_or(0) as usize,
-    );
-    let mut artifacts = std::collections::HashMap::new();
-    if !res.events.is_empty() && cfg.output.ssa {
-        let p = out_dir.join(format!("{src}.ass"));
-        outputs::write_ssa(&res.events, vw, vh, &cfg, &p)?;
-        artifacts.insert("ssa", p);
-    }
-    if !res.events.is_empty() && cfg.output.vobsub {
-        let (sp, ip) = outputs::write_vobsub(&res.events, vw, vh, &cfg, &out_dir.join(&src))?;
-        artifacts.insert("sub", PathBuf::from(sp));
-        artifacts.insert("idx", PathBuf::from(ip));
-    }
-    if !res.events.is_empty() && cfg.output.ocr_png {
-        let _files = outputs::write_ocr_png(&res.events, &cfg, &out_dir.join("subtitle_imgs"))?;
-        artifacts.insert("ocr_images", out_dir.join("subtitle_imgs"));
-    }
-    if cfg.output.json_timeline {
-        let p = out_dir.join(format!("{src}.timeline.json"));
-        outputs::write_json_timeline(&res.events, vinfo, &cfg, &p)?;
-        artifacts.insert("timeline", p);
-    }
-    if !res.events.is_empty() && cfg.output.srt {
-        let p = out_dir.join(format!("{src}.srt"));
-        outputs::write_srt(&res.events, &cfg, &p)?;
-        artifacts.insert("srt", p);
-    }
-    let proj = out_dir.join(format!("{src}.esrng.json"));
-    outputs::write_project(&res.events, &video, &cfg, &proj, &serde_json::json!(artifacts))?;
-    artifacts.insert("project", proj);
+    let (mut artifacts, proj) = api::write_all_outputs(&res.events, &res.filtered, &video, &cfg, &out_dir)
+        .map_err(|e| anyhow::Error::msg(e))?;
+    artifacts.insert("project".into(), proj);
     for (k, v) in artifacts {
-        println!("  {k}: {}", v.display());
+        println!("  {k}: {}", v);
     }
+    println!("被过滤候选：{} 条（可用字幕管理器 Recover Filtered 恢复）", res.filtered.len());
     Ok(())
 }
 

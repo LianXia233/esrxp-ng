@@ -1,6 +1,6 @@
 [package]
 name = "esrxp-ng-server"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 description = "esrxp-ng Rust 后端：FFmpeg 解码 + 硬字幕抓取引擎 + axum HTTP API（TDesign/Electron UI 后端）"
 
@@ -15,7 +15,7 @@ ffmpeg-next = { version = "9.0", default-features = false, features = [
     "codec", "format", "software-scaling", "software-resampling",
     "filter", "device",
 ] }
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "bmp"] }
 libc = "0.2"
 libloading = "0.8"
 

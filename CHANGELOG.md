@@ -2,6 +2,28 @@
 
 本项目语义化版本号（SemVer）。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.2.0] - 2026-09-29
+
+**功能全部对齐 esrXP beta 10** —— 按逆向分析报告（`esrXP_re/esrXP逆向分析报告.md`）第 6 节功能对照表逐项补齐。
+
+### 新增
+- **批处理（Batch）**：`/api/batch` 多视频批量抓取，UI 新增批处理卡片（多文件输入 + 状态/进度表）
+- **字幕管理器（Subtitle Manager）**：`/api/manager` list / recover / remove（标记删除）/ purge / crop / export；UI 视图（全部/隐藏已删/仅已删）、全选、恢复被过滤候选、标记删除选中、清除已删、裁剪选中、重新导出
+- **OCR 截图参数**：per_image（每图字幕数，多字幕拼一张）、scale（放大）、divid_into_2_lines（空白带检测拆两行）
+- **SRT 带位图（SubRip with bitmap）**：`output.srt_bitmap`，SRT 仅保留字幕图片所在时间轴（不含文本）+ 每字幕独立 `.bmp`（白底黑字）
+- **样式全字段对齐**（SSA）：Unicode 开关、Time Shift（±10ms 平移）、Outline Width、Shadow Depth、Primary/Secondary/Outline/Shadow 四色
+- **预览控制**：Scale Video（整帧缩放）、Sharpen Video、White Background、Slow Speed，均入 `preview` 配置段并作用于 ROI/OCR 截图
+- **Pixel Color 取色**：`/api/pixel` + UI 预览图第一栏点击取主色/描边色（Alt 点击取描边色）
+- **打开工程 .esr**：`/api/project/open`，UI 可直接打开 v2 工程（JSON，含 image/mask/roi_mask base64、deleted/filtered 状态）
+- **.esr 工程 v2**：升级为自包含工程（内嵌字幕位图/掩码/ROI 掩码/删除与过滤状态），管理器操作后重新导出全部产物
+- **CLI 对齐**：`rip` 子命令改为与 API 同一套 `write_all_outputs` 产物管线（SSA/VobSub/OCR/SRT/SRT+bitmap/JSON/.esr）
+
+### 修复
+- image crate 增加 `bmp` feature（修复 "The image format `Bmp` is not supported"）
+- SRT+bitmap 输出目录层级（`<stem>_subs/` 与 SRT 同级）
+- 批处理闭包借用、manager 路由 `?` 编译错误（改用 match 显式返回）
+- 字幕管理器表格 duration 字段由前端按 start/end 计算
+
 ## [0.1.1] - 2026-09-29
 
 ### 新增

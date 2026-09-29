@@ -156,6 +156,7 @@ pub struct OutputConfig {
     pub vobsub: bool,
     pub ocr_png: bool,
     pub srt: bool,                 // SRT：纯时间轴（不含文本，定位字幕图片出现区间）
+    pub srt_bitmap: bool,          // SubRip with bitmap：SRT 时间轴 + 每字幕独立位图
     pub json_timeline: bool,
     pub ocr: OcrConfig,
     pub max_subtitle_width: i64,
@@ -164,9 +165,27 @@ pub struct OutputConfig {
 
 impl Default for OutputConfig {
     fn default() -> Self {
-        Self { ssa: true, vobsub: true, ocr_png: true, srt: true, json_timeline: true,
+        Self { ssa: true, vobsub: true, ocr_png: true, srt: true, srt_bitmap: false,
+               json_timeline: true,
                ocr: OcrConfig { per_image: 1, scale: 1.0, divid_into_2_lines: false },
                max_subtitle_width: 720, fps: None }
+    }
+}
+
+/// 预览/预处理控制 —— 对应 esrXP [FMain] 的 Scale Video / Sharpen Video /
+/// White Background / Slow Speed。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct PreviewConfig {
+    pub scale_video: f64,      // Scale Video：整帧缩放（乘入 region.scale）
+    pub sharpen_video: bool,   // Sharpen Video：整帧锐化（并入 region.sharpen）
+    pub white_background: bool,// White Background：预览/输出背景置白
+    pub slow_speed: f64,       // Slow Speed：预览慢速（前端逐帧步进倍率）
+}
+
+impl Default for PreviewConfig {
+    fn default() -> Self {
+        Self { scale_video: 1.0, sharpen_video: false, white_background: false, slow_speed: 1.0 }
     }
 }
 
@@ -179,6 +198,7 @@ pub struct AppConfig {
     pub postprocess: PostprocessConfig,
     pub style: StyleConfig,
     pub output: OutputConfig,
+    pub preview: PreviewConfig,
     pub start_seconds: f64,
     pub end_seconds: f64,
     pub verbose: bool,

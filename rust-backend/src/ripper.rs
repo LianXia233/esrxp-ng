@@ -40,11 +40,13 @@ pub struct SubtitleEvent {
     pub roi_origin: (i64, i64),       // ROI 原点在原始帧中的坐标
     pub diff_frames: i64,
     pub source_frame: i64,
+    pub deleted: bool,         // 字幕管理器：标记删除（Show/Hide Deleted / Purge）
 }
 
 #[derive(Debug, Clone)]
 pub struct RipResult {
     pub events: Vec<SubtitleEvent>,
+    pub filtered: Vec<SubtitleEvent>, // Recover Filtered：被过滤掉的候选段
     pub video_info: serde_json::Value,
     pub candidates: i64,
     pub frames_processed: i64,
@@ -119,6 +121,8 @@ fn union_masks2(a: &[u8], b: &[u8]) -> Vec<u8> {
 }
 
 /// 裁切 ROI + 缩放 + 锐化（缩放走 FrameKernels：CUDA→CPU）。
+/// 对齐 esrXP Scale Video / Sharpen Video：preview.scale_video 乘入 ROI 缩放，
+/// preview.sharpen_video 并入锐化。
 pub fn prepare_roi(frame: &FrameData, cfg: &AppConfig) -> (Vec<u8>, usize, usize, (i64, i64)) {
     let (up, down, left, right) = (
         cfg.region.up.clamp(0, frame.height as i64) as usize,
@@ -140,17 +144,19 @@ pub fn prepare_roi(frame: &FrameData, cfg: &AppConfig) -> (Vec<u8>, usize, usize
     }
     let mut roi2 = roi;
     let (rw, rh) = (rw, rh);
+    let scale = cfg.region.scale * cfg.preview.scale_video.max(0.05);
+    let sharpen = cfg.region.sharpen || cfg.preview.sharpen_video;
     // 缩放（最近邻；GPU/CPU 一致）
-    if (cfg.region.scale - 1.0).abs() > 1e-6 && cfg.region.scale > 0.0 {
-        let (scaled, nw, nh) = kernels().scale(&roi2, rw, rh, cfg.region.scale);
+    if (scale - 1.0).abs() > 1e-6 && scale > 0.0 {
+        let (scaled, nw, nh) = kernels().scale(&roi2, rw, rh, scale);
         roi2 = scaled;
         let (rw, rh) = (nw, nh);
-        if cfg.region.sharpen {
+        if sharpen {
             roi2 = sharpen3(&roi2, rw, rh);
         }
         return (roi2, rw, rh, (x0 as i64, y0 as i64));
     }
-    if cfg.region.sharpen {
+    if sharpen {
         roi2 = sharpen3(&roi2, rw, rh);
     }
     (roi2, rw, rh, (x0 as i64, y0 as i64))
@@ -201,6 +207,7 @@ where
     let mut prev_roi: Option<Vec<u8>> = None;
     let mut prev_mask: Option<Vec<u8>> = None;
     let mut candidates: Vec<Candidate> = Vec::new();
+    let mut filtered_candidates: Vec<Candidate> = Vec::new();
     let mut frames_done = 0i64;
     let mut diff_frames = 0i64;
     let mut color_tuned = false;
@@ -269,6 +276,18 @@ where
                         close_only: true,
                     });
                     prev_mask = None;
+                } else if changed_mask.iter().any(|v| *v) {
+                    // 有帧差区域但颜色过滤后为空 → 被过滤掉的候选（Recover Filtered）
+                    let mask8: Vec<u8> = changed_mask.iter().map(|b| if *b { 255 } else { 0 }).collect();
+                    filtered_candidates.push(Candidate {
+                        idx: fd.index,
+                        time: fd.time,
+                        roi: Some(roi.clone()),
+                        mask: mask8,
+                        rw, rh,
+                        roi_origin: origin,
+                        close_only: false,
+                    });
                 }
             }
         }
@@ -284,9 +303,11 @@ where
 
     let events = segment(&candidates, fps, rcfg.gap_frames);
     let events = merge_repeat(events, fps, cfg.rip.force_merge);
+    let filtered = segment(&filtered_candidates, fps, rcfg.gap_frames);
 
     let res = RipResult {
         events,
+        filtered,
         video_info: json!({
             "path": video.path, "width": video.width, "height": video.height,
             "fps": video.fps, "duration_s": video.duration,
@@ -411,6 +432,7 @@ fn make_event(frames: &[Candidate], fps: f64,
         roi_origin: first.roi_origin(),
         diff_frames: frames.len() as i64,
         source_frame: last.idx,
+        deleted: false,
     }
 }
 
@@ -463,4 +485,34 @@ fn merge_repeat(events: Vec<SubtitleEvent>, fps: f64, force: bool) -> Vec<Subtit
         }
     }
     merged
+}
+
+/// 字幕管理器 Crop Subtitle：用当前 filter/后处理参数对某字幕时间段重新抓取，
+/// 产出更干净的 bbox/image/mask（对齐 esrXP Crop 语义）。
+pub fn crop_event(video: &mut VideoSource, cfg: &AppConfig, ev: &SubtitleEvent) -> Result<SubtitleEvent> {
+    let k: &dyn FrameKernels = kernels();
+    let pcfg = cfg.postprocess.clone();
+    let fcfg = cfg.filter.clone();
+    let mut cands: Vec<Candidate> = Vec::new();
+    let start = (ev.start_frame as f64 / video.fps - 0.2).max(0.0) as i64;
+    let end = (ev.end_frame + 1).min(video.frame_count.max(1));
+    video.decode_range(start, end, 1, |fd| {
+        let (roi, rw, rh, origin) = prepare_roi(&fd, cfg);
+        let mask = clean(&k.filter(&roi, rw, rh, &fcfg), rw, rh, &pcfg);
+        if mask.iter().any(|v| *v > 0) {
+            cands.push(Candidate {
+                idx: fd.index, time: fd.time,
+                roi: Some(roi), mask, rw, rh, roi_origin: origin, close_only: false,
+            });
+        }
+        Ok(())
+    })?;
+    if cands.is_empty() {
+        anyhow::bail!("裁剪重抓无结果（可能区域/颜色设置与当前字幕不匹配）");
+    }
+    let mut made = make_event(&cands, video.fps, None, None);
+    made.deleted = ev.deleted;
+    made.start = ev.start;
+    made.start_frame = ev.start_frame;
+    Ok(made)
 }
