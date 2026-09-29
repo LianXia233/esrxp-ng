@@ -9,10 +9,10 @@
 //!   GET  /api/artifact?path=...
 //! 静态：/vendor、/ui（TDesign 前端）
 
-use std::collections::HashMap;
-use std::path::Path;
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Path as AxPath, State};
 use axum::http::StatusCode;
@@ -162,6 +162,34 @@ pub struct AppState {
     pub cache_dir: String,
 }
 
+// ------------------------------------------------------------------ 产物目录白名单
+// /api/artifact 仅允许读取注册目录（preview 缓存 / rip 输出 / batch 输出 / 工程目录）下的文件，
+// 防止任意路径读取；canonicalize 统一 Windows \\?\ 前缀并规避 .. 与符号链接绕过。
+fn artifact_dirs() -> &'static Mutex<HashSet<PathBuf>> {
+    static D: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+    D.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn allow_artifact_dir(p: &Path) {
+    if let Ok(c) = p.canonicalize() {
+        artifact_dirs().lock().unwrap().insert(c);
+    }
+}
+
+fn artifact_dir_allowed(canon: &Path, extra: Option<&Path>) -> bool {
+    if let Some(e) = extra {
+        if let Ok(ce) = e.canonicalize() {
+            if canon.starts_with(&ce) {
+                return true;
+            }
+        }
+    }
+    artifact_dirs().lock().unwrap().iter().any(|d| canon.starts_with(d))
+}
+
+// 预览缓存自增序号（替代微秒取模命名，防碰撞）
+static PREVIEW_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn err_response(msg: &str) -> Response {
     (StatusCode::BAD_REQUEST, Json(json!({"error": msg}))).into_response()
 }
@@ -221,26 +249,7 @@ async fn api_preview(State(st): State<AppState>, Json(req): Json<PreviewReq>) ->
         let pw = mw + mw + mw;
         let ph = mh;
         let mut img = image::RgbaImage::new(pw as u32, ph as u32);
-        for y in 0..ph {
-            for x in 0..mw {
-                let src = y * mw + x;
-                let (r, g, b) = if m[src] > 0 {
-                    if x < mw {
-                        // 中：mask 白底
-                        (255u8, 255u8, 255u8)
-                    } else {
-                        (0, 0, 0)
-                    }
-                } else {
-                    (0, 0, 0)
-                };
-                let _ = (r, g, b);
-                // 左原图
-                let ps = src * 3;
-                img.put_pixel(x as u32, y as u32, image::Rgba([base[ps], base[ps + 1], base[ps + 2], 255]));
-            }
-        }
-        // 简化拼接：改为三列直接写
+        // 三列直接写：左原图 | 中 mask（白=命中） | 叠加（命中保留原色）
         for y in 0..ph {
             for x in 0..mw {
                 let src = y * mw + x;
@@ -259,7 +268,11 @@ async fn api_preview(State(st): State<AppState>, Json(req): Json<PreviewReq>) ->
                 img.put_pixel((mw * 2 + x) as u32, y as u32, image::Rgba([r2, g2.clamp(0, 255), b2, 255]));
             }
         }
-        let p = Path::new(&cache).join(format!("preview_{}.png", Instant::now().elapsed().as_micros() % 1_000_000));
+        let seq = PREVIEW_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if seq >= 32 {
+            let _ = std::fs::remove_file(Path::new(&cache).join(format!("preview_{}.png", seq - 32)));
+        }
+        let p = Path::new(&cache).join(format!("preview_{seq}.png"));
         img.save(&p).map_err(|e| e.to_string())?;
         Ok(json!({"image": format!("/api/artifact?path={}", p.display()), "frame": fd.index, "time": fd.time}))
     })
@@ -285,7 +298,7 @@ async fn api_rip(State(st): State<AppState>, Json(req): Json<RipReq>) -> Respons
         progress: json!({"done": 0, "total": 0, "found": 0, "pct": 0}),
         log: vec![],
         result: None,
-        started: Instant::now().elapsed().as_secs_f64(),
+        started: SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0),
     };
     {
         let mut jobs = st.jobs.lock().unwrap();
@@ -301,6 +314,7 @@ async fn api_rip(State(st): State<AppState>, Json(req): Json<RipReq>) -> Respons
         let out_dir = Path::new(&out_dir_owned);
         match (|| -> Result<(), String> {
             std::fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
+            allow_artifact_dir(out_dir);
             let mut vs = VideoSource::open(&req.path).map_err(|e| e.to_string())?;
             log.push(format!("视频: {}x{} @ {:.2} fps, {:.2}s",
                              vs.width, vs.height, vs.fps, vs.duration));
@@ -323,7 +337,7 @@ async fn api_rip(State(st): State<AppState>, Json(req): Json<RipReq>) -> Respons
                 json!({
                     "index": i + 1, "start": e.start, "end": e.end,
                     "start_frame": e.start_frame, "end_frame": e.end_frame,
-                    "bbox": e.bbox, "duration": (e.end - e.start) * 100.0f64.round() / 100.0,
+                    "bbox": e.bbox, "duration": ((e.end - e.start) * 100.0).round() / 100.0,
                     "diff_frames": e.diff_frames, "deleted": e.deleted,
                 })
             }).collect();
@@ -374,10 +388,22 @@ async fn api_job(State(st): State<AppState>, AxPath(job_id): AxPath<String>) -> 
     }
 }
 
-async fn api_artifact(query: axum::extract::Query<HashMap<String, String>>) -> Response {
+async fn api_artifact(State(st): State<AppState>, query: axum::extract::Query<HashMap<String, String>>) -> Response {
     match query.get("path") {
         Some(p) => {
             let path = Path::new(p);
+            // 安全校验：仅允许读取注册产物目录（cache / rip / batch / 工程目录）下的文件
+            let canon = match path.canonicalize() {
+                Ok(c) => c,
+                Err(_) => return err_response("文件不存在"),
+            };
+            if !artifact_dir_allowed(&canon, Some(Path::new(&st.cache_dir))) {
+                return (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({"error": "路径不在允许的产物目录内"})),
+                )
+                    .into_response();
+            }
             if path.is_file() {
                 let data = std::fs::read(path).unwrap_or_default();
                 let ct = mime_guess_light(path);
@@ -571,6 +597,7 @@ fn run_one_rip(path: &str, out_dir: &str, cfg: &AppConfig,
                -> Result<Value, String> {
     let out_dir = Path::new(out_dir);
     std::fs::create_dir_all(out_dir).map_err(|e| e.to_string())?;
+    allow_artifact_dir(out_dir);
     let mut vs = VideoSource::open(path).map_err(|e| e.to_string())?;
     let res = rip(&mut vs, cfg, Some(on_progress)).map_err(|e| e.to_string())?;
     let (artifacts, project_path) = write_all_outputs(&res.events, &res.filtered, path, cfg, out_dir)?;
@@ -620,6 +647,7 @@ fn load_project_for_manage(project: &str) -> Result<(Vec<SubtitleEvent>, Vec<Sub
     match load_esr(p) {
         Ok((events, filtered, video, cfg)) => {
             let out_dir = p.parent().map(|d| d.display().to_string()).unwrap_or_else(|| ".".into());
+            allow_artifact_dir(p.parent().unwrap_or_else(|| Path::new(".")));
             Ok((events, filtered, video, cfg, out_dir))
         }
         Err(e) => Err(err_response(&format!("工程文件解析失败: {e}"))),

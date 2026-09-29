@@ -454,7 +454,10 @@ fn merge_repeat_with(events: Vec<SubtitleEvent>, force: bool, iou_threshold: f64
             prev.end_frame = ev.end_frame;
             prev.diff_frames += ev.diff_frames;
             prev.roi_mask = union_masks2(&prev.roi_mask, &ev.roi_mask);
-            // 重算 bbox / mask / image（取时间更晚事件的图像）
+            // 保存合并前图像与 bbox（下方按并集 bbox 重建 image 用）
+            let old_bbox = prev.bbox;
+            let old_image = std::mem::take(&mut prev.image);
+            // 重算 bbox / mask / image（image 按并集 bbox 从 ROI 画布重建，保证与 mask 尺寸一致）
             let (w, h) = (prev.roi_w, prev.roi_h);
             let mut min_x = w as i64;
             let mut min_y = h as i64;
@@ -480,9 +483,36 @@ fn merge_repeat_with(events: Vec<SubtitleEvent>, force: bool, iou_threshold: f64
             }
             prev.bbox = (bx, by, bw, bh);
             prev.mask = mask;
-            prev.image = ev.image.clone();
-            prev.image_w = ev.image_w;
-            prev.image_h = ev.image_h;
+            // image 重建：合并前/被合并事件的 bbox 图像贴回 ROI 画布（更晚事件后贴覆盖），
+            // 再按并集 bbox 裁切 —— 保证 image 与 mask/bbox 尺寸一致（合并前两者可能不同）
+            {
+                let (ubx, uby, ubw, ubh) = prev.bbox;
+                let mut canvas = vec![0u8; w * h * 3];
+                let mut place = |canvas: &mut [u8], img: &[u8], bbox: (i64, i64, i64, i64)| {
+                    let (ex, ey, ew, eh) = (bbox.0 as usize, bbox.1 as usize, bbox.2 as usize, bbox.3 as usize);
+                    for y in 0..eh {
+                        for x in 0..ew {
+                            let d = ((ey + y) * w + ex + x) * 3;
+                            let s = (y * ew + x) * 3;
+                            if d + 3 <= canvas.len() && s + 3 <= img.len() {
+                                canvas[d..d + 3].copy_from_slice(&img[s..s + 3]);
+                            }
+                        }
+                    }
+                };
+                place(&mut canvas, &old_image, old_bbox);
+                place(&mut canvas, &ev.image, ev.bbox);
+                let mut image = Vec::with_capacity((ubw * ubh * 3) as usize);
+                for y in uby..uby + ubh {
+                    for x in ubx..ubx + ubw {
+                        let s = ((y as usize) * w + x as usize) * 3;
+                        image.extend_from_slice(&canvas[s..s + 3]);
+                    }
+                }
+                prev.image = image;
+                prev.image_w = ubw as usize;
+                prev.image_h = ubh as usize;
+            }
             prev.source_frame = ev.source_frame;
         } else {
             merged.push(ev);

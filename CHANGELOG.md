@@ -2,6 +2,23 @@
 
 本项目语义化版本号（SemVer）。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.4.4] - 2026-09-29
+
+**全量代码审计修复** —— 逐行审计全部源码（rust-backend / electron / ui / CI）后集中修复。
+
+### 安全
+- **`/api/artifact` 任意路径读取修复**：新增产物目录白名单（preview 缓存目录、rip/batch 输出目录、工程目录；canonicalize 规避 `..` 与符号链接绕过），白名单外路径一律 403
+
+### 修复
+- **合并重复后位图与 mask 尺寸不一致**：`merge_repeat_with` 中 mask 按并集 bbox 重算，但 image 直接沿用被合并事件的 bbox 尺寸，两事件 bbox 不同时违反同尺寸不变式（下游 VobSub/SSA 渲染存在越界/错位风险）；现按并集 bbox 从 ROI 画布重建 image
+- **CLI flag 缺值崩溃**：`parse_flag` 在 flag 位于参数末尾（无值）时索引越界 panic，改用 `args.get` 安全访问
+- **事件时长取整失效**：`duration` 表达式的 `.round()` 误作用于字面量 `100.0f64`（恒为 100），修正括号使两位小数四舍五入生效
+- **任务 started 恒为 0**：`Job.started` 误用 `Instant::now().elapsed()`（对刚创建的计时器恒 0），改为记录创建时刻的 Unix 时间戳（秒）
+- **预览缓存文件名碰撞**：`preview_{微秒%1e6}.png` 取模可能碰撞覆盖，改自增序号并滚动清理（保留最近 32 张）；同时删除 `api_preview` 中被完全覆盖的死代码拼接循环
+
+### 其他
+- CUDA 计算后端 PTX 修复（删除 `filter_kernel` 中未声明寄存器 `tid2`/`rslt` 死代码；此前 `cuModuleLoadDataEx` 必然编译失败，CUDA 内核自 0.4.0 起静默回退 CPU）随本版生效
+
 ## [0.4.3] - 2026-09-29
 
 **预览修复** —— 打开视频后预览第 0 帧报「帧不存在」。

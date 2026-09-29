@@ -57,7 +57,7 @@ fn print_help() {
 }
 
 fn parse_flag(args: &[String], flag: &str) -> Option<String> {
-    args.iter().position(|a| a == flag).map(|i| args[i + 1].clone())
+    args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1).cloned())
 }
 
 /// 调试：解码前 3 帧打印像素统计与帧差（验证解码/拷贝正确性）。
