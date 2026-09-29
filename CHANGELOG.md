@@ -13,7 +13,7 @@
 ### 新增
 - **合并重复（MIMergeRepeat 对齐）**：`POST /api/manager/merge_repeat`，对工程内全部未删除字幕按 mask IoU 相似度一键合并（可调 `iou_threshold` 默认 0.9、`max_gap_s` 默认 0.2 秒），操作后重导出全部产物；管理器工具行新增「合并重复」按钮
 - **管理器位图列与缩放预览（Manager Zoom 对齐）**：manager/list 与各管理器操作响应新增字幕位图（bbox 裁切 RGB24 base64），表格新增位图列（canvas 渲染、事件级缓存），工具行新增 50%-400% 缩放控件（步进 50%）
-- 默认值校准（esrXP 出厂 frame_skip=0 / pixel_difference=80 / ignore_change=80% 与本实现的语义映射）经云服务器样片 A/B 实测后另行调整，避免盲改破坏已验证基线
+- 默认值校准实测完成（GitHub 云编译 Linux 产物 + 样片 A/B）：当前默认 pixel_difference=20 / ignore_change_percent=0.5 / frame_skip=1 三条字幕全部命中真值（IoU=1.0）；esrXP 出厂值 80/80 在本实现语义下完全失效（0 条检出），确认默认值维持不变
 
 ## [0.4.0] - 2026-09-29
 
