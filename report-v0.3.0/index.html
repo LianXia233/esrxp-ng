@@ -169,7 +169,7 @@
       <div class="stat"><div class="v">2<em>×</em></div><div class="l">CI 双平台构建（Win x64 / Debian amd64）</div></div>
       <div class="stat"><div class="v">5<em> files</em></div><div class="l">v0.3.0 时间轴编辑：api +185 行 · ui +51</div></div>
       <div class="stat"><div class="v">3<em> / 4</em></div><div class="l">实测字幕 3 条 · 被过滤候选 4 条</div></div>
-      <div class="stat"><div class="v">36524836546</div><div class="l">v0.3.0 CI run · 双平台构建中</div></div>
+      <div class="stat"><div class="v">36524836546</div><div class="l">v0.3.0 CI run · 双 job success</div></div>
     </div>
     <div class="tagline"><span class="c">$</span> cargo build --features vendored-ffmpeg <span class="ok">Finished dev profile</span> → <span class="ok">rip: 字幕 3 条 · filtered 4</span> → <span class="ok">CI: Debian ✓ Windows ✓</span> → <span class="warn">Release v0.2.0 已上传</span></div>
   </div>
@@ -315,13 +315,13 @@
       <div class="asset">
         <div class="os">Windows 11 · x64</div>
         <div class="fn">esrxp-ng-0.3.0-win-x64.exe</div>
-        <div class="sz num">（CI 构建中，上传后更新）</div>
+        <div class="sz num"></div>
         <a class="btn" href="https://github.com/LianXia233/esrxp-ng/releases/download/v0.2.0/esrxp-ng-0.3.0-win-x64.exe" target="_blank" rel="noopener">下载 EXE</a>
       </div>
       <div class="asset">
         <div class="os">Debian / Ubuntu · amd64</div>
         <div class="fn">esrxp_0.3.0_amd64.deb</div>
-        <div class="sz num">（CI 构建中，上传后更新）</div>
+        <div class="sz num"></div>
         <a class="btn" href="https://github.com/LianXia233/esrxp-ng/releases/download/v0.2.0/esrxp_0.3.0_amd64.deb" target="_blank" rel="noopener">下载 DEB</a>
       </div>
     </div>
@@ -353,7 +353,7 @@
       xAxis:{type:'category',data:['Windows x64 EXE','Debian amd64 DEB'],axisLabel:{fontFamily:'JetBrains Mono,monospace',fontSize:12,color:'#24324D'},axisTick:{show:false},axisLine:{lineStyle:{color:'#C9D2DF'}}},
       yAxis:{type:'value',name:'字节 (B)',nameTextStyle:{color:'#5F6672',fontSize:11},axisLabel:{fontFamily:'JetBrains Mono,monospace',fontSize:11,color:'#5F6672',formatter:function(v){return (v/1048576).toFixed(0)+'M';}},splitLine:{lineStyle:{color:'#EDF0F5'}}},
       series:[{type:'bar',barWidth:56,
-        data:[{value:134275786,itemStyle:{color:'#2F6FED',borderRadius:[6,6,0,0]}},{value:84365752,itemStyle:{color:'#E8A33D',borderRadius:[6,6,0,0]}}],
+        data:[{value:134302006,itemStyle:{color:'#2F6FED',borderRadius:[6,6,0,0]}},{value:84260960,itemStyle:{color:'#E8A33D',borderRadius:[6,6,0,0]}}],
         label:{show:true,position:'top',fontFamily:'JetBrains Mono,monospace',fontSize:12,color:'#16233B',formatter:function(p){return (p.value/1048576).toFixed(1)+' MiB';}}}]});
     function resize(){ chart.resize(); }
     window.addEventListener('resize', resize);
