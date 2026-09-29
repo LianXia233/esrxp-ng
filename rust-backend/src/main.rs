@@ -171,28 +171,30 @@ async fn serve_pipe(app: axum::Router, name: &str) -> anyhow::Result<()> {
     {
         use hyper_util::rt::{TokioExecutor, TokioIo};
         use hyper_util::server::conn::auto::Builder as ConnBuilder;
+        use hyper_util::service::TowerToHyperService;
         use tokio::net::windows::named_pipe::ServerOptions;
         let mut server = ServerOptions::new().first_pipe_instance(true).create(name)?;
         loop {
             server.connect().await?;
-            let client = server.try_clone()?;
-            let svc = app.clone();
+            let client = server; // 连接实例整体移交任务（tokio 命名管道无 try_clone）
+            server = ServerOptions::new().create(name)?; // 先补位下一个实例，再 spawn 处理当前连接
+            let svc = TowerToHyperService::new(app.clone()); // axum Router 是 tower Service，需适配 hyper Service
             tokio::spawn(async move {
                 let _ = ConnBuilder::new(TokioExecutor::new())
                     .serve_connection_with_upgrades(TokioIo::new(client), svc).await;
             });
-            server = ServerOptions::new().create(name)?;
         }
     }
     #[cfg(not(windows))]
     {
         use hyper_util::rt::{TokioExecutor, TokioIo};
         use hyper_util::server::conn::auto::Builder as ConnBuilder;
+        use hyper_util::service::TowerToHyperService;
         let _ = std::fs::remove_file(name);
         let listener = tokio::net::UnixListener::bind(name)?;
         loop {
             let (sock, _) = listener.accept().await?;
-            let svc = app.clone();
+            let svc = TowerToHyperService::new(app.clone());
             tokio::spawn(async move {
                 let _ = ConnBuilder::new(TokioExecutor::new())
                     .serve_connection_with_upgrades(TokioIo::new(sock), svc).await;
