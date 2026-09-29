@@ -629,6 +629,13 @@ async fn api_log_get(State(st): State<AppState>, query: axum::extract::Query<Log
             p.to_path_buf()
         };
         if file.exists() {
+            // 只允许读取日志文件本身：避免「登记目录 -> 读该目录下任意文件」的读取面扩大
+            let is_log = file.file_name().and_then(|s| s.to_str()).map(|n| {
+                n == crate::logging::PROJECT_LOG_NAME || n == "esrxp-session.log"
+            }).unwrap_or(false);
+            if !is_log {
+                return err_response("仅允许读取 esrxp.log / esrxp-session.log");
+            }
             match file.canonicalize() {
                 Ok(c) if artifact_dir_allowed(&c, Some(Path::new(&st.cache_dir))) => {
                     lines = crate::logging::read_tail(&file, max).unwrap_or_else(|e| vec![e]);
