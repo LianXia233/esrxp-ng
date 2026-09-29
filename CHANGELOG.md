@@ -2,6 +2,17 @@
 
 本项目语义化版本号（SemVer）。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.4.2] - 2026-09-29
+
+**后端崩溃修复** —— 预览/抓取过程中后端异常终止（退出码 3221226356 / 0xC0000374）。
+
+### 修复
+- **hw 解码堆损坏（根因修复）**：`try_decode_hw` 将 `hw_frames_ctx` 所有权移交解码器后，清理路径 `avcodec_free_context` 已释放该 buffer，代码仍对原指针 `av_buffer_unref`，构成 use-after-free，Windows 构建下 preview/rip 必触发堆崩溃；现移交后置空本地指针，统一由 `avcodec_free_context` 释放
+- **Windows 默认回退纯 CPU 解码**：hw 解码链（NVDEC/D3D11VA）在 Windows GNU 构建 + FFmpeg 共享 DLL 组合下存在堆损坏（0.3.x-0.4.1 各版本实测必崩，Linux CPU 路径从不复现），本工具为离线处理场景，默认禁用 hw 解码；设环境变量 `ESRXP_HWDEC=1` 可强制启用 hw 探测，仅用于排查
+
+### 排查备注
+- 打开特定 MP4 时出现的 `UDTA parsing failed retrying raw` 为 FFmpeg 对非标 metadata atom 的降级警告（ffmpeg 8.1.2 独立构建同样输出），与本崩溃无因果关系；如需消除可 `ffmpeg -i in.mp4 -map 0 -c copy out.mp4` 转存
+
 ## [0.4.1] - 2026-09-29
 
 **esrXP 对齐补全** —— Merge Repeat 一键合并 + 管理器位图缩放预览。

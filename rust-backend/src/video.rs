@@ -132,7 +132,12 @@ impl VideoSource {
             .descriptor()
             .map(|d| d.name().to_string())
             .unwrap_or_default();
-        let backend = probe_hw();
+        // 0.4.2：hw 解码链（NVDEC/D3D11VA）在 Windows GNU 构建 + FFmpeg 共享 DLL 组合下
+        // 存在堆损坏（0xC0000374，preview/rip 实测必崩；Linux CPU 路径从不复现）。
+        // 本工具为离线处理场景，CPU 软解足够，默认回退 CPU；
+        // 设 ESRXP_HWDEC=1 可强制启用 hw 探测，仅用于后续排查。
+        let hwdec_env = std::env::var("ESRXP_HWDEC").map(|v| v == "1").unwrap_or(false);
+        let backend = if hwdec_env { probe_hw() } else { DecodeBackend::Cpu };
         Ok(Self {
             path: path.to_string(),
             width,
@@ -324,6 +329,10 @@ impl VideoSource {
         unsafe {
             (*codec_ctx).hw_frames_ctx = hw_frames;
         }
+        // 所有权已移交 codec_ctx（由 avcodec_free_context 统一释放）；本地指针必须置空。
+        // 否则清理路径 avcodec_free_context 释放 hw_frames_ctx 后，下方 av_buffer_unref
+        // 会再次解引用已释放的 AVBufferRef（use-after-free -> 0xC0000374 堆损坏）
+        let mut hw_frames: *mut ffi::AVBufferRef = std::ptr::null_mut();
         // 打开解码器
         let decoder_codec = unsafe { ffi::avcodec_find_decoder((*codec_ctx).codec_id) };
         if decoder_codec.is_null() {
