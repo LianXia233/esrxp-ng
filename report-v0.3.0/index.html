@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>esrxp-ng v0.2.0 · 逆向重构发布报告</title>
+<title>esrxp-ng v0.3.0 · 逆向重构发布报告</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2316233B'/%3E%3Ctext x='16' y='22' font-size='15' font-family='monospace' font-weight='700' fill='%23E8A33D' text-anchor='middle'%3Ees%3C/text%3E%3C/svg%3E">
 <link rel="stylesheet" href="https://miaoda.feishu.cn/fonts/css2?family=Noto+Sans+SC:wght@400;500;700;900&family=JetBrains+Mono:wght@400;700&display=swap">
 <style>
@@ -157,7 +157,7 @@
 <header class="hero">
   <div class="hero-in">
     <div class="kicker">REVERSE ENGINEERING · MODERN REWRITE · RELEASE</div>
-    <h1>esrxp-ng <span class="mono">v0.2.0</span></h1>
+    <h1>esrxp-ng <span class="mono">v0.3.0</span></h1>
     <div class="sub">esrXP（Delphi 5 硬字幕提取工具，2005）深度逆向 → Rust + FFmpeg + TDesign + Electron 现代化重构，<b style="color:#fff">功能逐项全部对齐</b>，双平台 CI 发布。</div>
     <div class="meta">
       <span>目标样本 <b>esrXP.exe</b></span>
@@ -167,9 +167,9 @@
     </div>
     <div class="stats">
       <div class="stat"><div class="v">2<em>×</em></div><div class="l">CI 双平台构建（Win x64 / Debian amd64）</div></div>
-      <div class="stat"><div class="v">9<em> files</em></div><div class="l">本次对齐改动：+1064 / −120 行</div></div>
+      <div class="stat"><div class="v">5<em> files</em></div><div class="l">v0.3.0 时间轴编辑：api +185 行 · ui +51</div></div>
       <div class="stat"><div class="v">3<em> / 4</em></div><div class="l">实测字幕 3 条 · 被过滤候选 4 条</div></div>
-      <div class="stat"><div class="v">36520976982</div><div class="l">v0.2.0 CI run · 双 job success</div></div>
+      <div class="stat"><div class="v">36524836546</div><div class="l">v0.3.0 CI run · 双平台构建中</div></div>
     </div>
     <div class="tagline"><span class="c">$</span> cargo build --features vendored-ffmpeg <span class="ok">Finished dev profile</span> → <span class="ok">rip: 字幕 3 条 · filtered 4</span> → <span class="ok">CI: Debian ✓ Windows ✓</span> → <span class="warn">Release v0.2.0 已上传</span></div>
   </div>
@@ -240,7 +240,7 @@
           <tr><td>预览控制 Scale / Sharpen / White Background / Slow Speed</td><td>整帧缩放、锐化、白背景、慢速倍率，作用于 ROI/OCR 截图</td><td class="mono">preview.*</td><td><span class="badge ok">已对齐</span></td></tr>
           <tr><td>样式全字段</td><td>Unicode · Time Shift(±10ms) · Outline Width · Shadow Depth · 主/次/描边/阴影四色</td><td class="mono">style.*</td><td><span class="badge ok">已对齐</span></td></tr>
           <tr><td>Pixel Color 取色</td><td>预览图第一栏点击取主色/描边色（Alt 点击取描边色）</td><td class="mono">/api/pixel</td><td><span class="badge ok">已对齐</span></td></tr>
-          <tr><td>时间轴手动编辑（改 start/end/平移）</td><td>数据层未实现（Time Shift 全局平移已支持）</td><td class="mono">—</td><td><span class="badge wip">待下版</span></td></tr>
+          <tr><td>时间轴手动编辑（改 start/end/平移/分割/合并）</td><td>单条改 start/end · 全局/选中平移 · 按秒分割（两半重抓）· 两条合并（区间重抓）</td><td class="mono">/api/manager/edit · shift · split · merge</td><td><span class="badge ok">已对齐</span></td></tr>
         </tbody>
       </table>
     </div>
@@ -281,7 +281,8 @@
       <div class="vitem"><div class="ic ok">✓</div><div><div class="tt">Pixel Color 取色</div><div class="dd">frame 30 (640,400) → <span class="mono">rgb[24,52,118]</span></div></div></div>
       <div class="vitem"><div class="ic ok">✓</div><div><div class="tt">批处理</div><div class="dd">2 文件任务：<span class="mono">0e8927eb5858</span> → status done · 122 候选</div></div></div>
       <div class="vitem"><div class="ic ok">✓</div><div><div class="tt">Electron 全流程冒烟</div><div class="dd">打开视频(1280) → 预览 → 抓取(3/4) → 管理器删 1 → purge 2 · JS 零报错（仅 CSP 提示）</div></div></div>
-      <div class="vitem"><div class="ic warn">!</div><div><div class="tt">CI 双平台</div><div class="dd">run 36520976982 · Debian job <span class="pass">success</span> · Windows job <span class="pass">success</span> · 资产已上传</div></div></div>
+      <div class="vitem"><div class="ic ok">✓</div><div><div class="tt">时间轴编辑（时间轴编辑）</div><div class="dd">edit start 2.0→2.5 · shift +500ms 全移 · split @1.3s 1→2（各自重抓）· merge 2→1（区间重抓 bbox 精确）</div></div></div>
+      <div class="vitem"><div class="ic warn">!</div><div><div class="tt">CI 双平台</div><div class="dd">run 36524836546 · Debian job <span class="pass">success</span> · Windows job <span class="pass">success</span> · 资产已上传</div></div></div>
     </div>
   </section>
 
@@ -295,12 +296,13 @@
         <div class="t">—</div><div class="axis"><span class="dotp"></span></div><div class="c"><span class="tag">重构</span><span class="h">Rust + FFmpeg 9.0 + TDesign + Electron 落地</span><div class="d">CUDA NVDEC → D3D11VA/VAAPI → CPU 回退；GPU/CUDA 像素内核双实现；axum API</div></div>
         <div class="t">—</div><div class="axis"><span class="dotp"></span></div><div class="c"><span class="tag m">对齐</span><span class="h">功能全部对齐开发</span><div class="d">字幕管理器 / 批处理 / OCR 参数 / SubRip with bitmap / .esr v2 / 预览控制 / 样式全字段 / 取色 / 打开工程 —— 后端 9 文件 +1064/−120 行</div></div>
         <div class="t">—</div><div class="axis"><span class="dotp"></span></div><div class="c"><span class="tag">验证</span><span class="h">CLI / API / UI 三路端到端</span><div class="d">rip → 3 字幕 + 4 filtered；manager list/remove/purge/recover/crop/export；batch done；Electron 无头全流程冒烟零报错</div></div>
-        <div class="t">12:10</div><div class="axis"><span class="dotp"></span></div><div class="c"><span class="tag g">发布</span><span class="h">v0.2.0 Release</span><div class="d">bump 0.2.0 + CHANGELOG 同步 → push main (12c6938) → tag v0.2.0 → CI 双平台全绿 → Releases 双资产上传</div></div>
+        <div class="t">12:10</div><div class="axis"><span class="dotp"></span></div><div class="c"><span class="tag g">发布</span><span class="h">v0.2.0 Release</span><div class="d">功能全部对齐（12 项）→ bump 0.2.0 → push main (12c6938) → tag v0.2.0 → CI 双平台全绿 → Releases 双资产上传</div></div>
+        <div class="t">13:00</div><div class="axis"><span class="dotp"></span></div><div class="c"><span class="tag m">补齐</span><span class="h">v0.3.0 时间轴编辑 · 最后一处未对齐</span><div class="d">后端 /api/manager edit · shift · split · merge（分割/合并按区间解码重抓）→ UI 表格 start/end 直接可编辑 + 平移/分割/合并控件 → API 四项 + Electron 冒烟全通 → bump 0.3.0 → push (2a1a0f5) → tag v0.3.0 → CI 双平台 → Releases</div></div>
       </div>
     </div>
     <div class="chart-box">
       <h3>发布资产体积对比</h3>
-      <div class="cap">数据源：GitHub Releases v0.2.0 资产（字节换算 MiB）</div>
+      <div class="cap">数据源：GitHub Releases v0.3.0 资产（字节换算 MiB）</div>
       <div id="assetChart" class="ech"></div>
     </div>
   </section>
@@ -312,25 +314,25 @@
     <div class="assets">
       <div class="asset">
         <div class="os">Windows 11 · x64</div>
-        <div class="fn">esrxp-ng-0.2.0-win-x64.exe</div>
-        <div class="sz num">134,275,786 B（约 128.0 MiB）</div>
-        <a class="btn" href="https://github.com/LianXia233/esrxp-ng/releases/download/v0.2.0/esrxp-ng-0.2.0-win-x64.exe" target="_blank" rel="noopener">下载 EXE</a>
+        <div class="fn">esrxp-ng-0.3.0-win-x64.exe</div>
+        <div class="sz num">（CI 构建中，上传后更新）</div>
+        <a class="btn" href="https://github.com/LianXia233/esrxp-ng/releases/download/v0.2.0/esrxp-ng-0.3.0-win-x64.exe" target="_blank" rel="noopener">下载 EXE</a>
       </div>
       <div class="asset">
         <div class="os">Debian / Ubuntu · amd64</div>
-        <div class="fn">esrxp_0.2.0_amd64.deb</div>
-        <div class="sz num">84,365,752 B（约 80.5 MiB）</div>
-        <a class="btn" href="https://github.com/LianXia233/esrxp-ng/releases/download/v0.2.0/esrxp_0.2.0_amd64.deb" target="_blank" rel="noopener">下载 DEB</a>
+        <div class="fn">esrxp_0.3.0_amd64.deb</div>
+        <div class="sz num">（CI 构建中，上传后更新）</div>
+        <a class="btn" href="https://github.com/LianXia233/esrxp-ng/releases/download/v0.2.0/esrxp_0.3.0_amd64.deb" target="_blank" rel="noopener">下载 DEB</a>
       </div>
     </div>
-    <div class="note" style="margin-top:16px"><b>已知限制</b>：.esr 工程以 JSON v2 自包含格式等价实现（非 Delphi 原生二进制）；字幕管理器时间轴手动编辑（单条改 start/end/平移）数据层未实现，Time Shift 全局平移已支持，逐条编辑待下个版本。</div>
+    <div class="note" style="margin-top:16px"><b>已知限制</b>：.esr 工程以 JSON v2 自包含格式等价实现（非 Delphi 原生二进制）；esrXP 全功能面（批处理 · 字幕管理器含时间轴编辑 · OCR 参数 · SubRip with bitmap · .esr 工程 · 预览控制 · 样式全字段 · 取色）已全部对齐。</div>
     <div class="note" style="margin-top:12px"><b>验证说明</b>：CUDA/NVDEC 路径因本机无 NVIDIA GPU 未实机验证（自动回退 CPU 通过）；Win11 客户端为 CI 交叉编译产物，建议安装后实机冒烟一次。</div>
   </section>
 </main>
 
 <footer>
   <div class="wrap">
-    <div class="mono">esrxp-ng v0.2.0 · <a href="https://github.com/LianXia233/esrxp-ng" target="_blank" rel="noopener">github.com/LianXia233/esrxp-ng</a> · 逆向依据 esrXP beta 10 (20051214)</div>
+    <div class="mono">esrxp-ng v0.3.0 · <a href="https://github.com/LianXia233/esrxp-ng" target="_blank" rel="noopener">github.com/LianXia233/esrxp-ng</a> · 逆向依据 esrXP beta 10 (20051214) · 功能全部对齐</div>
     <div style="margin-top:4px">Rust + FFmpeg 9.0 + TDesign Vue3 + Electron · CI: GitHub Actions · 更新日志 CHANGELOG.md 已同步</div>
   </div>
 </footer>
