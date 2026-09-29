@@ -274,7 +274,13 @@ async fn api_preview(State(st): State<AppState>, Json(req): Json<PreviewReq>) ->
         }
         let p = Path::new(&cache).join(format!("preview_{seq}.png"));
         img.save(&p).map_err(|e| e.to_string())?;
-        Ok(json!({"image": format!("/api/artifact?path={}", p.display()), "frame": fd.index, "time": fd.time}))
+        Ok(json!({
+            "image": format!("/api/artifact?path={}", p.display()),
+            // image_path：缓存 PNG 的绝对路径。UI 以 file:// 加载时相对 URL 到不了后端，
+            // Electron 侧经 IPC 取二进制（浏览器直连开发模式仍可用上面的相对路径）
+            "image_path": p.display().to_string(),
+            "frame": fd.index, "time": fd.time,
+        }))
     })
     .await;
     match out {

@@ -207,7 +207,7 @@
       </div>
       <div class="preview-box">
         <div class="preview-wrap" v-if="previewUrl" ref="pw">
-          <img :src="previewUrl" alt="预览" ref="pimg" draggable="false">
+          <img :src="previewUrl" alt="预览" ref="pimg" draggable="false" @load="syncSelFromRegion">
           <div class="sel" v-if="sel" :style="selStyle">
             <span class="tip">字幕区域 up={{cfg.region.up}} down={{cfg.region.down}} left={{cfg.region.left}} right={{cfg.region.right}}</span>
           </div>
@@ -527,8 +527,20 @@ const app = createApp({
           path: this.videoPath, frame: this.previewFrame,
           config: this.cfg, region_only: this.regionOnly,
         });
-        if (r.image) this.previewUrl = r.image;
-        else if (r.blob) this.previewUrl = URL.createObjectURL(r.blob);
+        // UI 自 0.4.0 起以 file:// 加载，后端返回的 /api/artifact?path=.. 相对路径会被
+        // 解析成 file:///api/... 而请求不到后端（0.4.0-0.4.4 预览破图的根因）。
+        // Electron 下统一经 IPC 取 PNG 二进制转 blob URL；浏览器直连后端的开发模式仍用相对路径。
+        if (r.image_path && window.esrxp) {
+          const bin = await this.api('/api/artifact?path=' + encodeURIComponent(r.image_path));
+          if (bin.blob) {
+            if (this.previewUrl && this.previewUrl.startsWith('blob:')) URL.revokeObjectURL(this.previewUrl);
+            this.previewUrl = URL.createObjectURL(bin.blob);
+          }
+        } else if (r.image) {
+          this.previewUrl = r.image;
+        } else if (r.blob) {
+          this.previewUrl = URL.createObjectURL(r.blob);
+        }
         this.$nextTick(() => this.syncSelFromRegion());
       } catch (e) { this.$message.error(e.message); }
       this.previewing = false;

@@ -2,6 +2,14 @@
 
 本项目语义化版本号（SemVer）。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.4.5] - 2026-09-29
+
+**预览破图修复** —— 点击「预览」后图像区只显示破图与黑色长条（后端已生成 PNG，前端加载不到）。
+
+### 修复
+- **预览图加载路径（根因）**：0.4.0 起 UI 由后端 HTTP 托管改为 `loadFile` 以 `file://` 加载，而 `/api/preview` 返回的 `image` 字段仍是相对 URL（`/api/artifact?path=...`），在 `file://` 页面下被解析为 `file:///api/artifact?...`，请求到不了后端，图片必然破图。现 `api_preview` 额外返回 `image_path`（缓存 PNG 绝对路径），前端在 Electron 下统一经 IPC 取二进制转 blob URL 渲染；浏览器直连后端的开发模式仍沿用相对路径
+- 预览图 `@load` 后再同步选区框，避免 blob URL 异步加载期间 `getBoundingClientRect` 取到 0 尺寸导致选区框不显示
+
 ## [0.4.4] - 2026-09-29
 
 **全量代码审计修复** —— 逐行审计全部源码（rust-backend / electron / ui / CI）后集中修复。
