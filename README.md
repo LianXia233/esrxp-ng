@@ -5,7 +5,7 @@
 - **Rust 后端**：FFmpeg（ffmpeg-next）解码 + 硬字幕抓取引擎 + axum HTTP API
 - **GPU 优先**：解码层自动探测 CUDA NVDEC（Windows D3D11VA / Linux VAAPI），失败自动回退 CPU；像素过滤/帧差/缩放内核有 CUDA PTX 与纯 Rust 双实现，运行时按硬件选择
 - **TDesign UI**：Vue 3 + TDesign v1.10.5（本地 vendor，无构建链，开箱即用）
-- **Electron 外壳**：Win11 目标，electron-builder 出 NSIS 安装包 / 便携版
+- **Electron 外壳**：Win11 目标，electron-builder 出 NSIS 安装包 / 便携版；0.4.0 起打包态经命名管道（Windows）/ Unix socket（Linux）与后端通信，**不监听任何网络端口**，UI 本地加载，免疫端口占用与系统代理劫持
 - **输出**：VobSub（.sub/.idx，4-bit RLE）、SSA（矢量轮廓）、OCR 位图（PNG，按字幕选区裁剪）、SRT 时间轴（无文本）、时间轴 JSON、工程 JSON
 - **零运行时依赖**：Debian 版将 FFmpeg 源码编译并静态链入单二进制；Windows 版 FFmpeg 运行时 DLL 随安装包分发，均无需用户另行安装 FFmpeg/Python
 

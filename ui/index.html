@@ -263,7 +263,7 @@
           <tr v-for="a in artifacts" :key="a.name">
             <td><t-tag :theme="a.kind==='ass'?'success':(a.kind==='sub'||a.kind==='idx'?'warning':'default')" variant="light">{{a.kind}}</t-tag></td>
             <td style="font-family:Consolas,monospace;font-size:12px">{{a.path}}</td>
-            <td><a class="dl-link" :href="'/api/artifact?path='+encodeURIComponent(a.path)" target="_blank">下载</a></td>
+            <td><t-button size="small" variant="text" theme="primary" @click="saveArtifact(a)">下载</t-button></td>
           </tr>
         </tbody>
       </table>
@@ -483,16 +483,20 @@ const app = createApp({
     },
     onPathInput(v) { this.videoPath = v; },
     async api(path, body) {
-      const r = await fetch(path, {
-        method: body !== undefined ? 'POST' : 'GET',
-        headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
-        body: body !== undefined ? JSON.stringify(body) : undefined,
-      });
-      const ct = r.headers.get('Content-Type') || '';
-      if (ct.includes('image')) return { blob: await r.blob() };
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok && j.error) throw new Error(j.error);
+      // 0.4.0 起经 preload 桥接（主进程走命名管道转发后端），不再直接 fetch 端口
+      const r = await window.esrxp.request(path, body);
+      const bin = Uint8Array.from(atob(r.b64), c => c.charCodeAt(0));
+      const ct = r.ct || '';
+      if (ct.includes('image')) return { blob: new Blob([bin], { type: ct }) };
+      let j = {};
+      try { j = JSON.parse(new TextDecoder().decode(bin)); } catch (_) {}
+      if (r.status >= 400 && j.error) throw new Error(j.error);
       return j;
+    },
+    async saveArtifact(a) {
+      const fallback = a.path.split(/[\\/]/).pop();
+      const saved = await window.esrxp.saveArtifact(a.path, a.name || fallback);
+      if (saved) this.$message.success('已保存: ' + saved);
     },
     async openVideo() {
       if (!this.videoPath) { this.$message.warning('请先输入视频路径'); return; }

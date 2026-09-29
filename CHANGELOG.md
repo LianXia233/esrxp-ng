@@ -2,6 +2,20 @@
 
 本项目语义化版本号（SemVer）。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.4.0] - 2026-09-29
+
+**去端口化架构** —— Electron 与后端改走进程内管道，彻底消除端口/代理/跨进程失联类故障。
+
+### 变更
+- **后端新增 `serve --pipe` 模式**：Windows 命名管道（`\\.\pipe\esrxp-ng-backend`）/ Unix domain socket 监听，hyper 直接服务 HTTP/1.1，协议语义与 TCP 模式完全一致；`--host/--port` TCP 模式保留（开发/浏览器调试用）
+- **Electron 不再开任何网络端口**：UI 改为 `loadFile` 直接从磁盘加载；渲染进程全部 API 请求经 preload contextBridge → 主进程 → `http.request({socketPath})` 管道转发后端；产物下载改为「另存为」对话框直存本地。端口占用误判、系统代理劫持 loopback（Failed to fetch）两类问题连根消除
+- **单实例锁**（`requestSingleInstanceLock`）：0.3.2 实测双实例导致第二实例后端起不来、错挂到第一实例后端，后端一崩 UI 全线断连；现二次启动自动聚焦既有窗口
+- **后端运行期崩溃告警**：后端进程异常退出时弹出明确错误框（含退出码与 stderr 尾部），不再静默 Failed to fetch；退出码与 stderr 尾部同步写入 startup.log
+- 打包态与开发态（`npm start`）均走管道；浏览器直连后端的开发方式不变（`serve --port`）
+
+### 升级说明
+- 版本号跨次版本号（0.3 → 0.4）：对外 HTTP API 无变化，仅传输层从 TCP localhost 换为管道；命令行 `rip` / `dump-config` / `dbg` 用法不变
+
 ## [0.3.2] - 2026-09-29
 
 **修复 Windows 启动白屏根因** —— UI 资产未进包，恢复 GPU 硬件加速。

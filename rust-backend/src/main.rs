@@ -2,7 +2,8 @@
 //!
 //! 用法：
 //!   esrxp-ng-server rip <video> [--out DIR] [--config FILE]    # 引擎 CLI（验证/调试）
-//!   esrxp-ng-server serve [--host 127.0.0.1] [--port 8000]      # 启动 UI 后端
+//!   esrxp-ng-server serve [--host 127.0.0.1] [--port 8000]      # 启动 UI 后端（HTTP，开发/浏览器用）
+//!   esrxp-ng-server serve --pipe NAME                         # 管道模式（Electron 打包态，无端口）
 //!   esrxp-ng-server dump-config                                 # 输出默认配置 JSON
 
 mod api;
@@ -49,7 +50,7 @@ fn print_help() {
         "esrxp-ng-server {} —— 硬字幕提取 Rust 后端\n\
          用法:\n\
          \x20 esrxp-ng-server rip <video> [--out DIR] [--config FILE]\n\
-         \x20 esrxp-ng-server serve [--host 127.0.0.1] [--port 8000]\n\
+         \x20 esrxp-ng-server serve [--host H] [--port P] | serve --pipe NAME\n\
          \x20 esrxp-ng-server dump-config",
         env!("CARGO_PKG_VERSION")
     );
@@ -130,6 +131,7 @@ pub fn cmd_rip(args: &[String]) -> Result<()> {
 }
 
 fn cmd_serve(args: &[String]) -> Result<()> {
+    let pipe = parse_flag(args, "--pipe");
     let host = parse_flag(args, "--host").unwrap_or_else(|| "127.0.0.1".into());
     let port: u16 = parse_flag(args, "--port")
         .map(|p| p.parse().unwrap_or(8000))
@@ -145,11 +147,56 @@ fn cmd_serve(args: &[String]) -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         let app = api::router(ui_dir.clone(), cache_dir);
-        let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
-        println!("esrxp-ng-server {} 已启动: http://{host}:{port}  (UI: {ui_dir})",
-                 env!("CARGO_PKG_VERSION"));
-        axum::serve(listener, app).await?;
-        Ok::<(), anyhow::Error>(())
+        match pipe {
+            // 管道模式：Windows 命名管道 / Unix domain socket，Electron 打包态专用，不开网络端口
+            Some(name) => {
+                println!("esrxp-ng-server {} 已启动: pipe {name}  (UI: {ui_dir})",
+                         env!("CARGO_PKG_VERSION"));
+                serve_pipe(app, &name).await
+            }
+            None => {
+                let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
+                println!("esrxp-ng-server {} 已启动: http://{host}:{port}  (UI: {ui_dir})",
+                         env!("CARGO_PKG_VERSION"));
+                axum::serve(listener, app).await.map_err(|e| anyhow::Error::new(e))
+            }
+        }
     })?;
     Ok(())
+}
+
+/// 管道监听：每 accept 一个连接即以独立任务跑 HTTP/1.1，协议语义与 TCP 模式一致。
+async fn serve_pipe(app: axum::Router, name: &str) -> anyhow::Result<()> {
+    #[cfg(windows)]
+    {
+        use hyper_util::rt::{TokioExecutor, TokioIo};
+        use hyper_util::server::conn::auto::Builder as ConnBuilder;
+        use tokio::net::windows::named_pipe::ServerOptions;
+        let mut server = ServerOptions::new().first_pipe_instance(true).create(name)?;
+        loop {
+            server.connect().await?;
+            let client = server.try_clone()?;
+            let svc = app.clone();
+            tokio::spawn(async move {
+                let _ = ConnBuilder::new(TokioExecutor::new())
+                    .serve_connection_with_upgrades(TokioIo::new(client), svc).await;
+            });
+            server = ServerOptions::new().create(name)?;
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        use hyper_util::rt::{TokioExecutor, TokioIo};
+        use hyper_util::server::conn::auto::Builder as ConnBuilder;
+        let _ = std::fs::remove_file(name);
+        let listener = tokio::net::UnixListener::bind(name)?;
+        loop {
+            let (sock, _) = listener.accept().await?;
+            let svc = app.clone();
+            tokio::spawn(async move {
+                let _ = ConnBuilder::new(TokioExecutor::new())
+                    .serve_connection_with_upgrades(TokioIo::new(sock), svc).await;
+            });
+        }
+    }
 }

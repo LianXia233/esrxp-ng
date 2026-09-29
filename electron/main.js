@@ -1,15 +1,31 @@
 // esrxp-ng Electron 外壳（Win11 目标）
-// 职责：启动内置 Rust 后端（esrxp-ng-server serve），加载 TDesign UI，桥接本地文件对话框。
+// 职责：启动内置 Rust 后端（esrxp-ng-server），经命名管道/Unix socket 通信（不开任何网络端口），
+//       加载本地 UI 文件，桥接文件对话框、API 请求与产物保存。
 const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
-const { spawn } = require('child_process');
-const path = require('path');
+const http = require('http');
 const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawn } = require('child_process');
 
-// GPU 硬件加速保持启用（0.3.1 曾全局禁用，0.3.2 撤销）；个别环境若渲染异常，
-// 用户可自行以 --disable-gpu 启动参数兜底，不再影响全部环境。
+// 0.4.0 起不再监听 TCP 端口：打包态经管道通信，规避端口占用/系统代理劫持/跨进程失联
+const PIPE_NAME = process.platform === 'win32'
+  ? '\\\\.\\pipe\\esrxp-ng-backend'
+  : path.join(os.tmpdir(), 'esrxp-ng-backend.sock');
 
-const PORT_BASE = 18080;
-const HOST = '127.0.0.1';
+// 单实例锁：0.3.2 实测双实例导致第二实例后端绑端口失败、错挂到第一实例后端，
+// 后端一崩 UI 全线 Failed to fetch。单实例 + second-instance 聚焦既有窗口。
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+
+app.on('second-instance', () => {
+  if (mainWin && !mainWin.isDestroyed()) {
+    if (mainWin.isMinimized()) mainWin.restore();
+    mainWin.show();
+    mainWin.focus();
+  }
+});
 
 // 启动日志：写 userData/startup.log，白屏/启动失败时用户可据此反馈
 function log(...args) {
@@ -28,9 +44,9 @@ function resolveServer() {
   const exeName = process.platform === 'win32' ? 'esrxp-ng-server.exe' : 'esrxp-ng-server';
   const candidates = [
     process.env.ESRXP_SERVER,
-    path.join(process.resourcesPath, 'server', exeName),                 // extraResources 输出
-    path.join(process.resourcesPath, 'app.asar.unpacked', 'server', exeName), // asarUnpack 解包
-    path.join(__dirname, 'server', exeName),                             // 开发态 electron/server
+    path.join(process.resourcesPath, 'server', exeName),                       // extraResources 输出
+    path.join(process.resourcesPath, 'app.asar.unpacked', 'server', exeName),  // asarUnpack 解包
+    path.join(__dirname, 'server', exeName),                                   // 开发态 electron/server
     path.join(__dirname, '..', 'rust-backend', 'target', 'release', exeName),
     path.join(__dirname, '..', 'rust-backend', 'target', 'debug', exeName),
   ].filter(Boolean);
@@ -40,17 +56,13 @@ function resolveServer() {
   return null;
 }
 
-let backend = null;
-let mainWin = null;
-let chosenPort = PORT_BASE;
-
 function resolveUiDir() {
   if (app.isPackaged) {
-    const extra = path.join(process.resourcesPath, 'ui');                  // extraResources 输出（0.3.2 起）
+    const extra = path.join(process.resourcesPath, 'ui');                          // extraResources 输出（0.3.2 起）
     if (fs.existsSync(extra)) { log('UI 目录: ' + extra); return extra; }
-    const unpacked = path.join(process.resourcesPath, 'app.asar.unpacked', 'ui'); // asarUnpack 兜底
+    const unpacked = path.join(process.resourcesPath, 'app.asar.unpacked', 'ui');  // asarUnpack 兜底
     if (fs.existsSync(unpacked)) { log('UI 目录: ' + unpacked); return unpacked; }
-    log('警告: 打包态未找到 UI 资源目录，页面将为 404 空白（检查 electron-builder extraResources 配置）');
+    log('警告: 打包态未找到 UI 资源目录（检查 electron-builder extraResources 配置）');
     return extra;
   }
   const dev = path.join(__dirname, '..', 'ui');
@@ -58,8 +70,36 @@ function resolveUiDir() {
   return dev;
 }
 
-// ---- 后端启动（含端口占用自动规避，白屏防御保留）----
-function startBackend(candidates) {
+// 管道 HTTP 请求：Node http over socketPath（Windows 命名管道 / Unix domain socket 均支持），
+// 与后端 axum 之间仍是标准 HTTP/1.1，协议语义与旧 TCP 模式完全一致。
+function pipeRequest(reqPath, method, bodyObj) {
+  return new Promise((resolve, reject) => {
+    const data = bodyObj !== undefined ? JSON.stringify(bodyObj) : null;
+    const req = http.request({
+      socketPath: PIPE_NAME,
+      path: reqPath,
+      method: method || 'GET',
+      headers: data ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } : {},
+      timeout: 300000,
+    }, res => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => resolve({ status: res.statusCode, ct: res.headers['content-type'] || '', buf: Buffer.concat(chunks) }));
+    });
+    req.on('error', reject);
+    req.on('timeout', () => { req.destroy(new Error('pipe request timeout')); });
+    if (data) req.write(data);
+    req.end();
+  });
+}
+
+let backend = null;
+let mainWin = null;
+let backendArmed = false; // 启动阶段完成后才启用「后端退出即告警」，避免启动期误报
+let quitting = false;
+
+// ---- 后端启动（管道模式，无端口）----
+function startBackend() {
   const bin = resolveServer();
   if (!bin) {
     log('未找到 esrxp-ng-server 可执行文件（检查 ESRXP_SERVER / resources/server / electron/server）');
@@ -68,40 +108,44 @@ function startBackend(candidates) {
   const uiDir = resolveUiDir();
   const cacheDir = path.join(app.getPath('userData'), 'cache');
   fs.mkdirSync(cacheDir, { recursive: true });
-  backend = spawn(bin, ['serve', '--host', HOST, '--port', String(chosenPort), '--ui', uiDir, '--cache', cacheDir], {
+  backend = spawn(bin, ['serve', '--ui', uiDir, '--cache', cacheDir, '--pipe', PIPE_NAME], {
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
   let stderrBuf = '';
   backend.stdout.on('data', d => log('[backend]', d.toString().trim()));
-  backend.stderr.on('data', d => { stderrBuf = (stderrBuf + d.toString()).slice(-2000); log('[backend]', d.toString().trim()); });
-  backend.on('exit', code => log('[backend] exited', code));
+  backend.stderr.on('data', d => { stderrBuf = (stderrBuf + d.toString()).slice(-4000); log('[backend]', d.toString().trim()); });
+  backend.on('exit', code => {
+    log('[backend] exited', code, stderrBuf ? 'stderr尾: ' + stderrBuf.slice(-400) : '');
+    // 运行期后端崩溃：明确报错而非 UI 静默 Failed to fetch（0.3.2 实测教训）
+    if (backendArmed && !quitting) {
+      try {
+        dialog.showErrorBox('esrxp-ng 后端已退出',
+          '后端进程异常终止（退出码 ' + code + '）。\n\n' +
+          (stderrBuf ? '后端输出（尾部）：\n' + stderrBuf.slice(-800) + '\n\n' : '') +
+          '请查看 用户数据目录/startup.log 并反馈开发者。');
+      } catch (_) {}
+      if (mainWin && !mainWin.isDestroyed()) mainWin.destroy();
+      app.exit(1);
+    }
+  });
   backend.stderrBuf = () => stderrBuf;
   return { ok: true };
 }
 
-// 校验「真」是 esrxp-ng 后端：/api/info 返回 JSON 且含 version 字段（避免端口被其他 HTTP 服务占用误判）
-function checkBackend(port) {
-  return new Promise(resolve => {
-    const http = require('http');
-    const req = http.get({ host: HOST, port, path: '/api/info', timeout: 2000 }, res => {
-      let body = '';
-      res.on('data', c => { body += c; });
-      res.on('end', () => {
-        try {
-          const j = JSON.parse(body);
-          resolve(!!(j && j.version));
-        } catch (_) { resolve(false); }
-      });
-    });
-    req.on('error', () => resolve(false));
-    req.on('timeout', () => { req.destroy(); resolve(false); });
-  });
+// 探活：/api/info 返回 JSON 且含 version 字段
+async function backendAlive() {
+  try {
+    const r = await pipeRequest('/api/info', 'GET');
+    if (r.status !== 200) return false;
+    const j = JSON.parse(r.buf.toString('utf8'));
+    return !!(j && j.version);
+  } catch (_) { return false; }
 }
 
 async function waitForBackend() {
   for (let i = 0; i < 60; i++) {
-    if (await checkBackend(chosenPort)) return true;
+    if (await backendAlive()) return true;
     await new Promise(r => setTimeout(r, 250));
   }
   return false;
@@ -115,6 +159,7 @@ function showFatal(title, body) {
 
 // ---- 窗口与加载兜底（白屏防御保留）----
 function createWindow() {
+  const uiDir = resolveUiDir();
   mainWin = new BrowserWindow({
     width: 1280,
     height: 900,
@@ -150,9 +195,25 @@ function createWindow() {
   });
   mainWin.on('closed', () => { mainWin = null; });
 
-  mainWin.loadURL(`http://${HOST}:${chosenPort}`);
-  log('加载 UI: http://' + HOST + ':' + chosenPort);
+  // UI 直接从磁盘加载，不再经 HTTP 托管
+  mainWin.loadFile(path.join(uiDir, 'index.html'));
+  log('加载 UI: ' + path.join(uiDir, 'index.html'));
 }
+
+// ---- IPC 桥 ----
+ipcMain.handle('api', async (e, reqPath, body) => {
+  const r = await pipeRequest(reqPath, body !== undefined ? 'POST' : 'GET', body);
+  return { status: r.status, ct: r.ct, b64: r.buf.toString('base64') };
+});
+
+ipcMain.handle('save-artifact', async (e, artifactPath, name) => {
+  const r = await pipeRequest('/api/artifact?path=' + encodeURIComponent(artifactPath), 'GET');
+  if (r.status !== 200) throw new Error('读取产物失败: HTTP ' + r.status);
+  const w = await dialog.showSaveDialog(mainWin, { defaultPath: name || path.basename(artifactPath) });
+  if (w.canceled || !w.filePath) return null;
+  fs.writeFileSync(w.filePath, r.buf);
+  return w.filePath;
+});
 
 ipcMain.handle('select-video', async () => {
   const r = await dialog.showOpenDialog(mainWin, {
@@ -175,7 +236,7 @@ ipcMain.handle('select-outdir', async () => {
 });
 
 app.whenReady().then(async () => {
-  log('app ready, packaged=' + app.isPackaged + ', platform=' + process.platform);
+  log('app ready, packaged=' + app.isPackaged + ', platform=' + process.platform + ', pipe=' + PIPE_NAME);
   const st = startBackend();
   if (!st.ok) {
     showFatal('后端缺失', '未找到 esrxp-ng-server 可执行文件。请重新安装客户端，或设置 ESRXP_SERVER 环境变量指向后端路径。');
@@ -185,23 +246,17 @@ app.whenReady().then(async () => {
   if (!ok) {
     const tail = backend && backend.stderrBuf ? backend.stderrBuf().slice(-800) : '';
     log('后端连接失败，stderr:', tail || '(空)');
-    // 端口可能被占用：换端口重试一次（规避 18080 被其他程序占用导致的白屏/失败）
-    const next = chosenPort + 1;
-    if (next <= 18085) {
-      log('端口 ' + chosenPort + ' 不可用，改用 ' + next);
-      try { backend.kill(); } catch (_) {}
-      chosenPort = next;
-      const st2 = startBackend();
-      if (st2.ok && await waitForBackend()) { createWindow(); return; }
-    }
     showFatal('后端启动失败',
-      '无法连接 esrxp-ng-server。\n\n后端输出：\n' + (tail || '(无输出，可能是 FFmpeg 运行库缺失)') +
+      '无法连接 esrxp-ng-server（管道 ' + PIPE_NAME + '）。\n\n后端输出：\n' + (tail || '(无输出，可能是 FFmpeg 运行库缺失)') +
       '\n\n请查看 用户数据目录/startup.log 并反馈开发者。');
     return;
   }
   createWindow();
+  backendArmed = true; // 窗口就绪后启用后端退出告警
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
+
+app.on('before-quit', () => { quitting = true; });
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
@@ -210,3 +265,5 @@ app.on('window-all-closed', () => {
 app.on('quit', () => {
   if (backend) { try { backend.kill(); } catch (_) {} }
 });
+
+} // end single-instance lock
