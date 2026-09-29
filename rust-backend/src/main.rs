@@ -105,6 +105,12 @@ pub fn cmd_rip(args: &[String]) -> Result<()> {
     let out = parse_flag(args, "--out").unwrap_or_else(|| "out".into());
     let config_path = parse_flag(args, "--config");
 
+    // 尽早绑定工程日志：视频信息 / 进度 / 完成汇总都要落盘到 <工程目录>/esrxp.log
+    let out_dir = PathBuf::from(&out);
+    std::fs::create_dir_all(&out_dir)?;
+    logging::bind_project(&out_dir);
+    logging::info(format!("CLI 抓取开始: video={video} out={}", out_dir.display()));
+
     let cfg = match config_path {
         Some(p) => config::AppConfig::from_json(&std::fs::read_to_string(&p)?)?,
         None => config::AppConfig::default(),
@@ -114,19 +120,23 @@ pub fn cmd_rip(args: &[String]) -> Result<()> {
              vs.width, vs.height, vs.fps, vs.duration, vs.frame_count);
     logging::info(format!("视频: {}x{} @ {:.2} fps, {:.2}s, {} 帧",
                           vs.width, vs.height, vs.fps, vs.duration, vs.frame_count));
-    let res = ripper::rip(&mut vs, &cfg, Some(|done, total, found| {
-        eprint!("\r  处理帧 {done}/{total}  候选 {found}");
-    }))?;
+    let res = ripper::rip(&mut vs, &cfg, {
+        let mut last_pct: i64 = -1;
+        move |done, total, found| {
+            let pct = if total > 0 { done * 100 / total } else { 0 };
+            if pct != last_pct && pct % 10 == 0 {
+                last_pct = pct;
+                logging::info(format!("进度 {pct}% ({done}/{total}) 候选 {found}"));
+            }
+            eprint!("\r  处理帧 {done}/{total}  候选 {found}");
+        }
+    })?;
     eprintln!();
     println!("完成：处理 {} 帧，变化帧 {}，字幕 {} 条，耗时 {:.2}s",
              res.frames_processed, res.candidates, res.events.len(), res.elapsed_s);
     logging::info(format!("抓取完成：处理 {} 帧，变化帧 {}，字幕 {} 条，耗时 {:.2}s",
                           res.frames_processed, res.candidates, res.events.len(), res.elapsed_s));
 
-    let out_dir = PathBuf::from(&out);
-    std::fs::create_dir_all(&out_dir)?;
-    logging::bind_project(&out_dir);
-    logging::info(format!("CLI 抓取开始: video={video} out={}", out_dir.display()));
     let (mut artifacts, proj) = api::write_all_outputs(&res.events, &res.filtered, &video, &cfg, &out_dir)
         .map_err(|e| anyhow::Error::msg(e))?;
     artifacts.insert("project".into(), proj);
