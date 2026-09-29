@@ -515,8 +515,6 @@ RET:
     mov.u32 hsv_v, mx;
     // 逐段判据
     mov.u32 base, 0;
-    mov.u32 tid2, tid;
-    mov.u32 rslt, 0;
 SEGLOOP:
     setp.ge.u32 ok, base, 48;
     @ok bra DONE;
