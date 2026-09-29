@@ -6,7 +6,7 @@
 - **GPU 优先**：解码层自动探测 CUDA NVDEC（Windows D3D11VA / Linux VAAPI），失败自动回退 CPU；像素过滤/帧差/缩放内核有 CUDA PTX 与纯 Rust 双实现，运行时按硬件选择
 - **TDesign UI**：Vue 3 + TDesign v1.10.5（本地 vendor，无构建链，开箱即用）
 - **Electron 外壳**：Win11 目标，electron-builder 出 NSIS 安装包 / 便携版；0.4.0 起打包态经命名管道（Windows）/ Unix socket（Linux）与后端通信，**不监听任何网络端口**，UI 本地加载，免疫端口占用与系统代理劫持
-- **输出**：VobSub（.sub/.idx，4-bit RLE）、SSA（矢量轮廓）、OCR 位图（PNG，按字幕选区裁剪）、SRT 时间轴（无文本）、时间轴 JSON、工程 JSON
+- **输出**：VobSub（.sub/.idx，4-bit RLE）、SSA（矢量轮廓）、OCR 位图（PNG/JPG/BMP，按字幕选区裁剪，抗锯齿 + 可后处理）、SRT 时间轴（无文本）、时间轴 JSON、工程 JSON
 - **零运行时依赖**：Debian 版将 FFmpeg 源码编译并静态链入单二进制；Windows 版 FFmpeg 运行时 DLL 随安装包分发，均无需用户另行安装 FFmpeg/Python
 
 ## 目录结构
@@ -25,7 +25,7 @@ esrxp-ng/
 │   │   ├── api.rs           # axum：open/preview/rip/job/artifact + 静态托管
 │   │   └── main.rs          # CLI：rip / serve / dump-config / dbg
 │   └── Cargo.toml
-├── ui/                      # TDesign Vue3 单页（index.html + vendor/，OCR 选区拖拽）
+├── ui/                      # TDesign Vue3 单页（index.html + vendor/，预览查看器 + OCR 选区拖拽）
 ├── electron/                # Electron 外壳（main/preload/package.json/smoke.js，asarUnpack 解包）
 ├── tests/                   # 端到端验证产物（rust_out=Rust、out=历史基线）
 ├── sample_hardsub.mp4       # 测试视频（3 条字幕，真值 0.5–1.5 / 2.0–3.0 / 3.5–5.0）
@@ -84,6 +84,21 @@ npm run dist:win # Win11 打包：NSIS 安装包 + 便携版（需 Windows 或 C
 5. **字幕状态机**：mask IoU < 0.7 断开内容段；IoU ≥ 0.9 且间隔 ≤ 2 帧合并重复；`gap_frames` 分段；消失帧封口
 6. **自动选色**：最亮 15% 中位 = 主色、最暗 15% = 描边，经 `colors_plausible` / `mask_plausible` 门控，不通过则回退配置色
 7. **输出**：VobSub 调色板（0=背景、1=主色、2=描边）+ 4-bit RLE 扩展编码；SSA 矢量轮廓
+
+## 截图与后处理（0.5.0）
+
+导出的字幕图不再是二值 mask 的最近邻放大，而是**按覆盖率重建的抗锯齿图像**：
+
+1. `mask` 双线性采样把二值场变成连续场；每个输出像素再取 N×N 子采样求平均 → 得到 0..1 的边缘覆盖率
+2. 按覆盖率在前景色与背景色之间线性混合：`gray`（默认，白底黑字、边缘平滑）、`color`（保留原视频像素色）、`binary`（旧版二值硬边，兼容用）
+3. 之后依次应用后处理：裁剪 → 留边 → 旋转 / 镜像 → 亮度 / 对比度 / 灰度 → 最大宽度限制（lanczos3 等滤镜）
+
+| 指标（同一样张） | 旧 binary + 最近邻 | 新 gray + 抗锯齿 |
+| --- | --- | --- |
+| 灰阶数（scale=1 / 3） | 2 / 2 | 13 / 25 |
+| 边缘过渡像素占比（scale=1） | 0.00% | 15.62% |
+
+预览区为独立视口（contain 自适应，图像完整可见），支持滚轮缩放（以光标为锚点）、拖拽平移、双击 1:1、全屏灯箱；「导出效果」模式直接渲染导出成品。参数经「保存为默认参数」落盘为 `esrxp-config.json`，启动时自动套用。
 
 ## GPU / CUDA
 

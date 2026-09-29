@@ -141,12 +141,49 @@ impl Default for StyleConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+/// OCR 影像 / 字幕截图导出控制（对齐 esrXP [FOCRImage]，0.5.0 扩展画质与后处理项）。
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct OcrConfig {
-    pub per_image: i64,
-    pub scale: f64,
-    pub divid_into_2_lines: bool,
+    pub per_image: i64,           // Subtitle Per Image：每张图容纳的字幕条数
+    pub scale: f64,               // Scale Subtitle：缩放比例
+    pub divid_into_2_lines: bool, // Divid 2 lines：两行字幕拆成上下两张
+    // —— 渲染画质（决定「是否清晰」的关键） ——
+    pub color_mode: String,       // gray(默认,前景/背景两色平滑混合) / binary(旧二值硬边) / color(保留原视频色)
+    pub antialias: bool,          // 边缘抗锯齿：mask 覆盖率重建，关闭即回到硬边
+    pub supersample: i64,         // 抗锯齿采样数 N（每像素 N×N 次采样，1-4）
+    pub text_color: String,       // 前景（文字）色 #RRGGBB
+    pub bg_color: String,         // 背景色 #RRGGBB
+    // —— 输出格式与质量 ——
+    pub format: String,           // png / jpg / bmp
+    pub quality: i64,             // JPG 质量 1-100（png/bmp 为无损，忽略该项）
+    pub scale_filter: String,     // 重采样滤镜：nearest / triangle / catmullrom / lanczos3
+    pub max_width: i64,           // 输出最大宽度限制（0 = 不限）
+    // —— 后处理 ——
+    pub padding: i64,             // 四周留边（输出像素）
+    pub crop_top: i64,            // 上边裁剪（输出像素）
+    pub crop_bottom: i64,         // 下边裁剪
+    pub crop_left: i64,           // 左边裁剪
+    pub crop_right: i64,          // 右边裁剪
+    pub rotate: i64,              // 旋转：0 / 90 / 180 / 270
+    pub flip_h: bool,             // 水平镜像
+    pub flip_v: bool,             // 垂直镜像
+    pub brightness: i64,          // 亮度：-100..100
+    pub contrast: i64,            // 对比度：-100..100
+    pub grayscale: bool,          // 转为灰度图
+}
+
+impl Default for OcrConfig {
+    fn default() -> Self {
+        Self { per_image: 1, scale: 1.0, divid_into_2_lines: false,
+               color_mode: "gray".into(), antialias: true, supersample: 3,
+               text_color: "#000000".into(), bg_color: "#FFFFFF".into(),
+               format: "png".into(), quality: 95,
+               scale_filter: "lanczos3".into(), max_width: 0,
+               padding: 0, crop_top: 0, crop_bottom: 0, crop_left: 0, crop_right: 0,
+               rotate: 0, flip_h: false, flip_v: false,
+               brightness: 0, contrast: 0, grayscale: false }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -167,7 +204,7 @@ impl Default for OutputConfig {
     fn default() -> Self {
         Self { ssa: true, vobsub: true, ocr_png: true, srt: true, srt_bitmap: false,
                json_timeline: true,
-               ocr: OcrConfig { per_image: 1, scale: 1.0, divid_into_2_lines: false },
+               ocr: OcrConfig::default(),
                max_subtitle_width: 720, fps: None }
     }
 }

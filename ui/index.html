@@ -21,13 +21,30 @@
   .form-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap:12px 16px; }
   .form-grid .field label { font-size:12px; color:#5f6672; display:block; margin-bottom:5px; }
   .meta-tags { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
-  .preview-box { display:flex; gap:12px; align-items:flex-start; }
-  .preview-wrap { position:relative; width:100%; display:inline-block; }
-  .preview-wrap img { max-width:100%; border-radius:8px; border:1px solid #e5e8ee; background:#000; display:block; user-select:none; -webkit-user-select:none; }
-  .preview-wrap .sel { position:absolute; border:2px solid #ff4d4f; background:rgba(255,77,79,.12); pointer-events:none; box-shadow:0 0 0 9999px rgba(0,0,0,.25); }
-  .preview-wrap .sel .tip { position:absolute; left:0; top:-20px; background:#ff4d4f; color:#fff; font-size:11px; line-height:18px; padding:0 6px; border-radius:4px; white-space:nowrap; }
-  .preview-wrap .clear-sel { position:absolute; right:6px; bottom:6px; z-index:5; }
-  .preview-box .ph { width:100%; height:180px; border-radius:8px; border:1px dashed #d4d9e0; display:flex; align-items:center; justify-content:center; color:#9aa1ac; font-size:13px; background:#fafbfc; }
+  /* 预览查看器（0.5.0）：图像完整可见（contain 自适应）+ 滚轮缩放 / 拖拽平移 / 全屏 */
+  .viewer { position:relative; width:100%; height:56vh; min-height:320px; border-radius:8px; border:1px solid #e5e8ee;
+            overflow:hidden; cursor:grab; touch-action:none; background-color:#20242c;
+            background-image:linear-gradient(45deg,#262b34 25%,transparent 25%),linear-gradient(-45deg,#262b34 25%,transparent 25%),
+                             linear-gradient(45deg,transparent 75%,#262b34 75%),linear-gradient(-45deg,transparent 75%,#262b34 75%);
+            background-size:20px 20px; background-position:0 0,0 10px,10px -10px,-10px 0; }
+  .viewer.dragging { cursor:grabbing; }
+  .viewer img { position:absolute; left:0; top:0; transform-origin:0 0; display:block; user-select:none; -webkit-user-select:none;
+                image-rendering:auto; }
+  .viewer img.pixelated { image-rendering:pixelated; }
+  .viewer .sel { position:absolute; border:2px solid #ff4d4f; background:rgba(255,77,79,.12); pointer-events:none; box-shadow:0 0 0 9999px rgba(0,0,0,.28); }
+  .viewer .sel .tip { position:absolute; left:0; top:-20px; background:#ff4d4f; color:#fff; font-size:11px; line-height:18px; padding:0 6px; border-radius:4px; white-space:nowrap; }
+  .viewer .hint { position:absolute; left:8px; bottom:8px; font-size:12px; color:#cfd6df; background:rgba(0,0,0,.5); padding:2px 8px; border-radius:6px; pointer-events:none; }
+  .viewer-ph { width:100%; height:56vh; min-height:320px; border-radius:8px; border:1px dashed #d4d9e0; display:flex; align-items:center; justify-content:center; color:#9aa1ac; font-size:13px; background:#fafbfc; text-align:center; padding:0 24px; }
+  .lightbox { position:fixed; inset:0; z-index:1000; background:rgba(0,0,0,.93); }
+  .lightbox .stage { position:absolute; inset:0; overflow:hidden; cursor:grab; touch-action:none; }
+  .lightbox .stage.dragging { cursor:grabbing; }
+  .lightbox .stage img { position:absolute; left:0; top:0; transform-origin:0 0; display:block; user-select:none; }
+  .lightbox .stage img.pixelated { image-rendering:pixelated; }
+  .lightbox .bar { position:absolute; left:50%; bottom:20px; transform:translateX(-50%); display:flex; align-items:center; gap:8px;
+                   background:rgba(255,255,255,.12); padding:8px 16px; border-radius:10px; color:#e8ecf2; font-size:13px; }
+  .lightbox .bar .lb-btn { cursor:pointer; padding:2px 10px; border-radius:6px; background:rgba(255,255,255,.14); color:#eef2f7; user-select:none; }
+  .lightbox .bar .lb-btn:hover { background:rgba(255,255,255,.28); }
+  .lightbox .bar .lb-pct { min-width:44px; text-align:center; font-variant-numeric:tabular-nums; }
   .log-box { background:#0f172a; color:#cbd5e1; font-family:"Cascadia Code",Consolas,monospace; font-size:12px; border-radius:8px; padding:12px; height:150px; overflow:auto; white-space:pre-wrap; }
   .progress-row { display:flex; align-items:center; gap:14px; }
   .artifact-table { width:100%; border-collapse:collapse; font-size:13px; }
@@ -36,7 +53,7 @@
   .dl-link { color:var(--brand); text-decoration:none; }
   .dl-link:hover { text-decoration:underline; }
   .flex-between { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-  @media (max-width:760px){ .form-grid{grid-template-columns:1fr 1fr;} .preview-box{flex-direction:column;} }
+  @media (max-width:760px){ .form-grid{grid-template-columns:1fr 1fr;} .viewer,.viewer-ph{height:44vh;} }
 </style>
 </head>
 <body>
@@ -143,6 +160,33 @@
             <div class="field"><label>大面积块下限 (large_block)</label>
               <t-input-number :value="cfg.postprocess.large_block" :min="0" :max="100000" @change="v=>set('postprocess.large_block',v)"></t-input-number></div>
           </div>
+          <div style="font-size:12px;color:#5f6672;margin:14px 0 6px;">截图图片后处理（作用于导出的每张字幕图）</div>
+          <div class="form-grid">
+            <div class="field"><label>裁剪 上 (crop_top)</label>
+              <t-input-number :value="cfg.output.ocr.crop_top" :min="0" :max="4000" @change="v=>set('output.ocr.crop_top',v)"></t-input-number></div>
+            <div class="field"><label>裁剪 下 (crop_bottom)</label>
+              <t-input-number :value="cfg.output.ocr.crop_bottom" :min="0" :max="4000" @change="v=>set('output.ocr.crop_bottom',v)"></t-input-number></div>
+            <div class="field"><label>裁剪 左 (crop_left)</label>
+              <t-input-number :value="cfg.output.ocr.crop_left" :min="0" :max="4000" @change="v=>set('output.ocr.crop_left',v)"></t-input-number></div>
+            <div class="field"><label>裁剪 右 (crop_right)</label>
+              <t-input-number :value="cfg.output.ocr.crop_right" :min="0" :max="4000" @change="v=>set('output.ocr.crop_right',v)"></t-input-number></div>
+            <div class="field"><label>四周留边 (padding)</label>
+              <t-input-number :value="cfg.output.ocr.padding" :min="0" :max="200" @change="v=>set('output.ocr.padding',v)"></t-input-number></div>
+            <div class="field"><label>旋转 (rotate)</label>
+              <t-select :value="cfg.output.ocr.rotate" @change="v=>set('output.ocr.rotate',v)" style="width:100%">
+                <t-option v-for="r in [0,90,180,270]" :key="r" :value="r" :label="r + '°'"></t-option>
+              </t-select></div>
+            <div class="field"><label>水平镜像 (flip_h)</label>
+              <t-switch :value="cfg.output.ocr.flip_h" @change="v=>set('output.ocr.flip_h',v)"></t-switch></div>
+            <div class="field"><label>垂直镜像 (flip_v)</label>
+              <t-switch :value="cfg.output.ocr.flip_v" @change="v=>set('output.ocr.flip_v',v)"></t-switch></div>
+            <div class="field"><label>亮度 (brightness -100..100)</label>
+              <t-input-number :value="cfg.output.ocr.brightness" :min="-100" :max="100" @change="v=>set('output.ocr.brightness',v)"></t-input-number></div>
+            <div class="field"><label>对比度 (contrast -100..100)</label>
+              <t-input-number :value="cfg.output.ocr.contrast" :min="-100" :max="100" @change="v=>set('output.ocr.contrast',v)"></t-input-number></div>
+            <div class="field"><label>转灰度 (grayscale)</label>
+              <t-switch :value="cfg.output.ocr.grayscale" @change="v=>set('output.ocr.grayscale',v)"></t-switch></div>
+          </div>
         </t-tab-panel>
         <t-tab-panel value="out" label="输出">
           <div class="row" style="gap:18px;margin-top:10px;">
@@ -154,11 +198,6 @@
             <div class="field"><label>最大字幕宽度</label>
               <t-input-number :value="cfg.output.max_subtitle_width" :min="10" :max="4000" @change="v=>set('output.max_subtitle_width',v)"></t-input-number></div>
             <t-checkbox :checked="cfg.output.srt_bitmap" @change="v=>set('output.srt_bitmap',v)">SRT 带位图（SubRip with bitmap）</t-checkbox>
-            <div class="field"><label>OCR 每图字幕数 (per_image)</label>
-              <t-input-number :value="cfg.output.ocr.per_image" :min="1" :max="20" @change="v=>set('output.ocr.per_image',v)"></t-input-number></div>
-            <div class="field"><label>OCR 放大 (scale)</label>
-              <t-input-number :value="cfg.output.ocr.scale" :min="0.1" :max="8" :step="0.1" @change="v=>set('output.ocr.scale',v)"></t-input-number></div>
-            <t-checkbox :checked="cfg.output.ocr.divid_into_2_lines" @change="v=>set('output.ocr.divid_into_2_lines',v)">每字幕拆 2 行</t-checkbox>
             <div class="field"><label>SSA 字体</label>
               <t-input :value="cfg.style.font_name" placeholder="Arial" @change="v=>set('style.font_name',v)"></t-input></div>
             <t-checkbox :checked="cfg.style.no_default_style" @change="v=>set('style.no_default_style',v)">不使用默认样式</t-checkbox>
@@ -179,21 +218,85 @@
               <t-input-number :value="cfg.style.shadow_depth" :min="0" :max="10" @change="v=>set('style.shadow_depth',v)"></t-input-number></div>
           </div>
         </t-tab-panel>
+        <t-tab-panel value="shot" label="截图">
+          <div class="form-grid" style="margin-top:10px;">
+            <div class="field"><label>渲染模式 (color_mode)</label>
+              <t-select :value="cfg.output.ocr.color_mode" @change="v=>set('output.ocr.color_mode',v)" style="width:100%">
+                <t-option value="gray" label="gray · 双色平滑（推荐）"></t-option>
+                <t-option value="binary" label="binary · 旧版二值硬边"></t-option>
+                <t-option value="color" label="color · 保留原视频色"></t-option>
+              </t-select></div>
+            <div class="field"><label>抗锯齿 (antialias)</label>
+              <t-switch :value="cfg.output.ocr.antialias" @change="v=>set('output.ocr.antialias',v)"></t-switch></div>
+            <div class="field"><label>抗锯齿采样 (supersample 1-4)</label>
+              <t-input-number :value="cfg.output.ocr.supersample" :min="1" :max="4" @change="v=>set('output.ocr.supersample',v)"></t-input-number></div>
+            <div class="field"><label>文字色 (text_color)</label>
+              <input type="color" :value="cfg.output.ocr.text_color" @change="e=>set('output.ocr.text_color',e.target.value)" style="width:44px;height:30px;border:none;background:none;cursor:pointer"></div>
+            <div class="field"><label>背景色 (bg_color)</label>
+              <input type="color" :value="cfg.output.ocr.bg_color" @change="e=>set('output.ocr.bg_color',e.target.value)" style="width:44px;height:30px;border:none;background:none;cursor:pointer"></div>
+            <div class="field"><label>缩放比例 (scale)</label>
+              <t-input-number :value="cfg.output.ocr.scale" :min="0.1" :max="8" :step="0.1" @change="v=>set('output.ocr.scale',v)"></t-input-number></div>
+            <div class="field"><label>缩放滤镜 (scale_filter)</label>
+              <t-select :value="cfg.output.ocr.scale_filter" @change="v=>set('output.ocr.scale_filter',v)" style="width:100%">
+                <t-option v-for="f in ['lanczos3','catmullrom','triangle','nearest','gaussian']" :key="f" :value="f" :label="f"></t-option>
+              </t-select></div>
+            <div class="field"><label>输出格式 (format)</label>
+              <t-select :value="cfg.output.ocr.format" @change="v=>set('output.ocr.format',v)" style="width:100%">
+                <t-option value="png" label="png · 无损（推荐）"></t-option>
+                <t-option value="jpg" label="jpg · 体积小，有损"></t-option>
+                <t-option value="bmp" label="bmp · 无损体积大"></t-option>
+              </t-select></div>
+            <div class="field"><label>图片质量 (quality，仅 jpg)</label>
+              <t-input-number :value="cfg.output.ocr.quality" :min="1" :max="100" @change="v=>set('output.ocr.quality',v)"></t-input-number></div>
+            <div class="field"><label>输出最大宽度 (max_width，0=不限)</label>
+              <t-input-number :value="cfg.output.ocr.max_width" :min="0" :max="8000" @change="v=>set('output.ocr.max_width',v)"></t-input-number></div>
+            <div class="field"><label>每图字幕数 (per_image)</label>
+              <t-input-number :value="cfg.output.ocr.per_image" :min="1" :max="20" @change="v=>set('output.ocr.per_image',v)"></t-input-number></div>
+            <div class="field"><label>两行拆上下两张 (divid_into_2_lines)</label>
+              <t-switch :value="cfg.output.ocr.divid_into_2_lines" @change="v=>set('output.ocr.divid_into_2_lines',v)"></t-switch></div>
+          </div>
+          <div class="row" style="margin-top:12px;align-items:center;gap:10px">
+            <t-button size="small" theme="primary" variant="outline" @click="previewOcrResult">预览导出效果</t-button>
+            <span style="font-size:12px;color:#8b93a1">按当前「截图 + 后处理」参数渲染当前帧，所见即导出成品</span>
+          </div>
+        </t-tab-panel>
       </t-tabs>
+      <div class="row" style="margin-top:14px;align-items:center;gap:10px">
+        <t-button theme="primary" variant="outline" size="small" @click="saveUserConfig">保存为默认参数</t-button>
+        <t-button variant="outline" size="small" @click="loadUserConfig(false)">载入自定义默认</t-button>
+        <t-button variant="outline" size="small" @click="resetUserConfig">恢复出厂默认</t-button>
+        <span style="font-size:12px;color:#8b93a1">配置来源：{{cfgSource === 'file' ? ('自定义 · ' + cfgPath) : '出厂默认'}}（保存后新工程与下次启动自动套用）</span>
+      </div>
     </div>
 
     <!-- 3. 预览 -->
     <div class="card">
-      <h2><span class="step">3</span>帧预览 <span style="font-weight:400;color:#8b93a1;font-size:12px">（原图 / 提取 mask / 仅 mask 叠加 · 拖动框选字幕区域，不必全屏截图）</span></h2>
-      <div class="row" style="margin-bottom:12px;">
-        <t-input-number :value="previewFrame" :min="0" :max="maxFrame" @change="v=>previewFrame=v"></t-input-number>
+      <h2><span class="step">3</span>帧预览 <span style="font-weight:400;color:#8b93a1;font-size:12px">（原图 / 叠加 / 掩码 / 三列 / 导出效果 · 缩放平移全屏 · 开「框选区域」后拖动即可设定字幕区域）</span></h2>
+      <div class="row" style="margin-bottom:10px;">
+        <t-input-number :value="previewFrame" :min="0" :max="maxFrame" size="small" style="width:120px" @change="v=>previewFrame=v"></t-input-number>
         <t-button theme="primary" variant="outline" @click="doPreview" :loading="previewing">预览</t-button>
-        <t-switch v-model="regionOnly" size="small"></t-switch>
+        <t-radio-group :value="previewMode" @change="v=>setPreviewMode(v)" size="small">
+          <t-radio-button value="raw">原图</t-radio-button>
+          <t-radio-button value="overlay">叠加</t-radio-button>
+          <t-radio-button value="mask">掩码</t-radio-button>
+          <t-radio-button value="combo">三列</t-radio-button>
+          <t-radio-button value="ocr">导出效果</t-radio-button>
+        </t-radio-group>
+        <t-switch :value="regionOnly" size="small" @change="v=>{regionOnly=v; if(previewUrl) doPreview();}"></t-switch>
         <span style="font-size:12px;color:#5f6672">仅 ROI 区域</span>
+      </div>
+      <div class="row" style="margin-bottom:10px;gap:10px;align-items:center">
+        <t-button size="small" variant="outline" @click="fitView">适应窗口</t-button>
+        <t-button size="small" variant="outline" @click="zoomTo(1)">1:1</t-button>
+        <t-button size="small" variant="outline" @click="zoomBy(0.25)">放大</t-button>
+        <t-button size="small" variant="outline" @click="zoomBy(-0.25)">缩小</t-button>
+        <t-button size="small" theme="primary" variant="outline" :disabled="!previewUrl" @click="openFullscreen">全屏查看</t-button>
+        <t-switch :value="selectMode" size="small" @change="v=>selectMode=v"></t-switch>
+        <span style="font-size:12px;color:#5f6672">框选区域</span>
+        <span style="font-size:12px;color:#8b93a1">缩放 {{Math.round(viewScale*100)}}%（滚轮缩放 · 拖拽平移 · 双击 1:1 · Alt+拖拽随时框选）</span>
         <t-button v-if="previewUrl" theme="danger" variant="outline" size="small" @click="clearSel">清除选区</t-button>
         <t-button v-if="previewUrl" theme="warning" variant="outline" size="small" @click="pickSubtitleColor">取主色</t-button>
         <t-button v-if="previewUrl" theme="warning" variant="outline" size="small" @click="pickOutlineColor">取描边色</t-button>
-        <span style="font-size:12px;color:#5f6672">（点击预览图第一栏取色，Alt+点击取描边色）</span>
       </div>
       <div class="row" style="margin-bottom:10px;gap:16px;">
         <div class="field"><label>Scale Video（整帧缩放）</label>
@@ -205,14 +308,30 @@
         <div class="field"><label>Slow Speed（慢速倍率）</label>
           <t-input-number :value="cfg.preview.slow_speed" :min="0.1" :max="10" :step="0.1" @change="v=>set('preview.slow_speed',v)"></t-input-number></div>
       </div>
-      <div class="preview-box">
-        <div class="preview-wrap" v-if="previewUrl" ref="pw">
-          <img :src="previewUrl" alt="预览" ref="pimg" draggable="false" @load="syncSelFromRegion">
-          <div class="sel" v-if="sel" :style="selStyle">
-            <span class="tip">字幕区域 up={{cfg.region.up}} down={{cfg.region.down}} left={{cfg.region.left}} right={{cfg.region.right}}</span>
-          </div>
+      <div class="viewer" v-if="previewUrl" :class="{dragging:panning}" ref="vp"
+           @wheel.prevent="onWheel" @pointerdown="beginPan" @dblclick="zoomTo(1)" @contextmenu.prevent>
+        <img :src="previewUrl" ref="pimg" draggable="false" :class="{pixelated: viewScale>=1}" :style="imgStyle" @load="onImgLoad">
+        <div class="sel" v-if="selStyle" :style="selStyle">
+          <span class="tip">字幕区域 up={{cfg.region.up}} down={{cfg.region.down}} left={{cfg.region.left}} right={{cfg.region.right}}</span>
         </div>
-        <div v-else class="ph">打开视频后点击「预览」，在图上拖动框选字幕区域（OCR 截图将只裁剪该区域）</div>
+        <div class="hint" v-if="previewMode==='combo'">三列：原图 | 掩码 | 叠加（仅第一列可框选）</div>
+        <div class="hint" v-else-if="previewMode==='ocr'">导出效果：{{cfg.output.ocr.color_mode}} · {{cfg.output.ocr.format}} · 缩放 {{cfg.output.ocr.scale}}×（即导出成品）</div>
+        <div class="hint" v-else-if="previewMeta">图像 {{previewMeta.width}}×{{previewMeta.height}} · 帧 {{previewMeta.frame_width}}×{{previewMeta.frame_height}}</div>
+      </div>
+      <div v-else class="viewer-ph">打开视频后点击「预览」<br>可滚轮缩放、拖拽平移、双击或「全屏查看」查看细节；切到「导出效果」可直接看到截图与后处理的成品</div>
+      <div class="lightbox" v-if="lightbox" @click.self="lightbox=false">
+        <div class="stage" :class="{dragging:panning}" ref="lstage"
+             @wheel.prevent="onWheel" @pointerdown="beginPan" @dblclick="zoomTo(1)" @contextmenu.prevent>
+          <img :src="previewUrl" draggable="false" :class="{pixelated: viewScale>=1}" :style="imgStyle">
+        </div>
+        <div class="bar">
+          <span class="lb-btn" @click="zoomBy(-0.25)">缩小</span>
+          <span class="lb-pct">{{Math.round(viewScale*100)}}%</span>
+          <span class="lb-btn" @click="zoomBy(0.25)">放大</span>
+          <span class="lb-btn" @click="zoomTo(1)">1:1</span>
+          <span class="lb-btn" @click="fitView">适应</span>
+          <span class="lb-btn" @click="lightbox=false">关闭 (Esc)</span>
+        </div>
       </div>
     </div>
 
@@ -352,7 +471,14 @@ const app = createApp({
         filter: { method: 'color_outline', subtitle_color: [255,255,255], outline_color: [0,0,0], pixel_compensate: 1, enable_filter: true, additional_colors: [] },
         postprocess: { single_dot: true, single_line: true, large_block: 0, touch_edge: false, pass_center: true, center_tolerance: 0.12 },
         output: { ssa: true, vobsub: true, ocr_png: true, srt: true, srt_bitmap: false, json_timeline: true,
-                  ocr: { per_image: 1, scale: 1.0, divid_into_2_lines: false }, max_subtitle_width: 720 },
+                  ocr: { per_image: 1, scale: 1.0, divid_into_2_lines: false,
+                         color_mode: 'gray', antialias: true, supersample: 3,
+                         text_color: '#000000', bg_color: '#FFFFFF',
+                         format: 'png', quality: 95, scale_filter: 'lanczos3', max_width: 0,
+                         padding: 0, crop_top: 0, crop_bottom: 0, crop_left: 0, crop_right: 0,
+                         rotate: 0, flip_h: false, flip_v: false,
+                         brightness: 0, contrast: 0, grayscale: false },
+                  max_subtitle_width: 720 },
         style: { unicode: true, time_shift_10ms: 0, outline_width: 1, shadow_depth: 0,
                  primary_color: '&H00FFFFFF&', secondary_color: '&H000000FF&',
                  outline_color_ssa: '&H00000000&', shadow_color: '&H00000000&',
@@ -377,6 +503,24 @@ const app = createApp({
       batchTimer: null,
       batchRunning: false,
       picking: null,
+      // 预览查看器（0.5.0）
+      previewMode: 'raw',
+      previewMeta: null,
+      viewScale: 1,
+      panX: 0,
+      panY: 0,
+      vpW: 0,
+      vpH: 0,
+      imgNat: { w: 0, h: 0 },
+      panning: false,
+      panStart: null,
+      panMoved: false,
+      suppressClick: false,
+      selectMode: false,
+      lightbox: false,
+      // 自定义默认参数持久化
+      cfgSource: 'default',
+      cfgPath: '',
     };
   },
   computed: {
@@ -385,9 +529,31 @@ const app = createApp({
       const p = this.job.progress;
       return p.total > 0 ? Math.round(p.done / p.total * 100) : 0;
     },
+    imgLeft() {
+      return (this.vpW - this.imgNat.w * this.viewScale) / 2 + this.panX;
+    },
+    imgTop() {
+      return (this.vpH - this.imgNat.h * this.viewScale) / 2 + this.panY;
+    },
+    imgStyle() {
+      const n = this.imgNat;
+      if (!n.w) return { width: '0px', height: '0px' };
+      return { width: n.w + 'px', height: n.h + 'px',
+               transform: 'translate(' + this.imgLeft + 'px,' + this.imgTop + 'px) scale(' + this.viewScale + ')' };
+    },
     selStyle() {
-      if (!this.sel) return {};
-      return { left: this.sel.x + 'px', top: this.sel.y + 'px', width: this.sel.w + 'px', height: this.sel.h + 'px' };
+      // 拖拽中显示实时矩形；其余时间由 region 配置反算（随缩放/平移自动跟随）
+      if (this.selDragging && this.sel) {
+        return { left: this.sel.x + 'px', top: this.sel.y + 'px', width: this.sel.w + 'px', height: this.sel.h + 'px' };
+      }
+      if (this.previewMode === 'ocr' || !this.previewMeta || !this.vinfo) return null;
+      const W = this.vinfo.width, H = this.vinfo.height, r = this.cfg.region;
+      const a = this.frameToLocal(r.left, r.up);
+      const b = this.frameToLocal(W - r.right, H - r.down);
+      if (!a || !b) return null;
+      const w = b.x - a.x, h = b.y - a.y;
+      if (w < 4 || h < 4) return null;
+      return { left: a.x + 'px', top: a.y + 'px', width: w + 'px', height: h + 'px' };
     },
     visibleManagerEvents() {
       const v = this.managerView;
@@ -421,48 +587,164 @@ const app = createApp({
       }
       this.set('filter.additional_colors', arr);
     },
+    // ---- 预览查看器（0.5.0）：完整可见 + 滚轮缩放 / 拖拽平移 / 全屏 ----
+    activeVp() {
+      if (this.lightbox && this.$refs.lstage) return this.$refs.lstage;
+      return this.$refs.vp || null;
+    },
+    measureViewport() {
+      const el = this.activeVp();
+      if (el) { this.vpW = el.clientWidth; this.vpH = el.clientHeight; }
+    },
+    onImgLoad(e) {
+      const img = (e && e.target) ? e.target : this.$refs.pimg;
+      if (!img) return;
+      this.imgNat = { w: img.naturalWidth || 0, h: img.naturalHeight || 0 };
+      this.$nextTick(() => this.fitView());
+    },
+    fitView() {
+      this.measureViewport();
+      const n = this.imgNat;
+      if (!n.w || !n.h || !this.vpW || !this.vpH) return;
+      // contain：完整显示、不截断不留白（放大超过 1:1 时用 pixelated 保证锐利不糊）
+      this.viewScale = Math.min(this.vpW / n.w, this.vpH / n.h);
+      this.panX = 0; this.panY = 0;
+    },
+    zoomTo(s) {
+      const v = Math.min(16, Math.max(0.02, s));
+      if (Math.abs(v - this.viewScale) < 1e-6) return;
+      this.viewScale = v;
+      this.clampPan();
+    },
+    zoomBy(d) { this.zoomTo(this.viewScale + d); },
+    clampPan() {
+      const n = this.imgNat;
+      if (!n.w) return;
+      const mx = Math.max(this.vpW * 0.4, (n.w * this.viewScale - this.vpW) / 2 + this.vpW * 0.35);
+      const my = Math.max(this.vpH * 0.4, (n.h * this.viewScale - this.vpH) / 2 + this.vpH * 0.35);
+      this.panX = Math.min(mx, Math.max(-mx, this.panX));
+      this.panY = Math.min(my, Math.max(-my, this.panY));
+    },
+    onWheel(e) {
+      const el = this.activeVp();
+      if (!el || !this.imgNat.w) return;
+      const rect = el.getBoundingClientRect();
+      const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
+      const anchor = this.localToFrame(cx, cy);
+      const o = this.frameOrigin();
+      this.viewScale = Math.min(16, Math.max(0.02, this.viewScale * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+      if (anchor && o) {
+        // 以光标为锚点：缩放后光标下的帧像素保持不动
+        const nx = this.imgLeft + ((anchor.x - o.ox) * o.s) * this.viewScale;
+        const ny = this.imgTop + ((anchor.y - o.oy) * o.s) * this.viewScale;
+        this.panX += cx - nx;
+        this.panY += cy - ny;
+      }
+      this.clampPan();
+    },
+    openFullscreen() {
+      if (!this.previewUrl) return;
+      this.lightbox = true;
+      this.$nextTick(() => this.fitView());
+    },
+    beginPan(e) {
+      if (!this.imgNat.w) return;
+      const wantSelect = (this.selectMode || e.altKey) && !this.lightbox && e.button === 0;
+      if (wantSelect) { this.onSelDown(e); return; }
+      this.panning = true;
+      this.panMoved = false;
+      this.panStart = { x: e.clientX, y: e.clientY, px: this.panX, py: this.panY };
+      e.preventDefault();
+    },
+    movePan(e) {
+      if (this.selDragging) { this.onSelMove(e); return; }
+      if (!this.panning || !this.panStart) return;
+      const dx = e.clientX - this.panStart.x, dy = e.clientY - this.panStart.y;
+      if (Math.abs(dx) > 4 || Math.abs(dy) > 4) this.panMoved = true;
+      this.panX = this.panStart.px + dx;
+      this.panY = this.panStart.py + dy;
+      this.clampPan();
+    },
+    endPan() {
+      if (this.selDragging) this.onSelUp();
+      if (this.panning && this.panMoved) {
+        this.suppressClick = true;
+        setTimeout(() => { this.suppressClick = false; }, 0);
+      }
+      this.panning = false;
+      this.panStart = null;
+    },
+    // ---- 帧像素 <-> 视图坐标映射（支持 ROI 缩放与三列构图） ----
+    frameOrigin() {
+      const m = this.previewMeta;
+      if (!m) return null;
+      if (m.region_only) {
+        const s = (m.roi_scale && m.roi_scale > 0) ? m.roi_scale : 1;
+        const o = m.roi_origin || [0, 0];
+        return { ox: o[0], oy: o[1], s };
+      }
+      return { ox: 0, oy: 0, s: 1 };
+    },
+    previewCols() { return this.previewMode === 'combo' ? 3 : 1; },
+    localToFrame(lx, ly) {
+      const o = this.frameOrigin();
+      if (!o || !this.imgNat.w || !this.viewScale) return null;
+      const k = this.viewScale * o.s;
+      const x = o.ox + (lx - this.imgLeft) / k;
+      const y = o.oy + (ly - this.imgTop) / k;
+      if (!isFinite(x) || !isFinite(y)) return null;
+      return { x, y };
+    },
+    frameToLocal(fx, fy) {
+      const o = this.frameOrigin();
+      if (!o || !this.imgNat.w) return null;
+      return { x: this.imgLeft + ((fx - o.ox) * o.s) * this.viewScale,
+               y: this.imgTop + ((fy - o.oy) * o.s) * this.viewScale };
+    },
+    inFrameColumn(lx) {
+      if (!this.imgNat.w || this.previewMode === 'ocr') return false;
+      const colW = this.imgNat.w / this.previewCols() * this.viewScale;
+      return lx >= this.imgLeft && lx <= this.imgLeft + colW;
+    },
     // ---- 选区（拖动框选字幕区域，OCR 截图只裁剪该区域） ----
     onSelDown(e) {
-      if (!this.$refs.pimg || !this.$refs.pw) return;
-      const img = this.$refs.pimg;
-      const rect = img.getBoundingClientRect();
-      // 只允许在第一栏（原图）框选
-      const px = e.clientX - rect.left;
-      const py = e.clientY - rect.top;
-      if (px < 0 || px > rect.width / 3 || py < 0 || py > rect.height) return;
+      const el = this.activeVp();
+      if (!el || !this.imgNat.w || this.lightbox) return;
+      const rect = el.getBoundingClientRect();
+      const lx = e.clientX - rect.left, ly = e.clientY - rect.top;
+      if (!this.inFrameColumn(lx)) return;
       this.selDragging = true;
-      this.selStart = { x: px, y: py, rectW: rect.width, rectH: rect.height };
-      this.sel = { x: px, y: py, w: 0, h: 0 };
+      this.sel = { x: lx, y: ly, w: 0, h: 0, x0: lx, y0: ly };
       e.preventDefault();
     },
     onSelMove(e) {
-      if (!this.selDragging || !this.selStart) return;
-      const img = this.$refs.pimg;
-      const rect = img.getBoundingClientRect();
-      let x2 = e.clientX - rect.left;
-      let y2 = e.clientY - rect.top;
-      x2 = Math.max(0, Math.min(x2, rect.width / 3));
-      y2 = Math.max(0, Math.min(y2, rect.height));
-      const x1 = this.selStart.x, y1 = this.selStart.y;
-      const x = Math.min(x1, x2), y = Math.min(y1, y2);
-      this.sel = { x, y, w: Math.abs(x2 - x1), h: Math.abs(y2 - y1) };
+      if (!this.selDragging || !this.sel) return;
+      const el = this.activeVp();
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const lx = e.clientX - rect.left, ly = e.clientY - rect.top;
+      const x1 = this.sel.x0, y1 = this.sel.y0;
+      const x = Math.min(x1, lx), y = Math.min(y1, ly);
+      this.sel = { x: x, y: y, w: Math.abs(lx - x1), h: Math.abs(ly - y1), x0: x1, y0: y1 };
     },
     onSelUp() {
       if (!this.selDragging) return;
       this.selDragging = false;
-      if (!this.sel || this.sel.w < 4 || this.sel.h < 4) { this.sel = null; return; }
-      // 换算到视频原始坐标（第一栏为原图）
+      const s = this.sel;
+      if (!s || s.w < 4 || s.h < 4 || !this.vinfo) { this.sel = null; return; }
       const W = this.vinfo.width, H = this.vinfo.height;
-      const scaleX = W / (this.selStart.rectW / 3);
-      const scaleY = H / this.selStart.rectH;
-      const vx1 = Math.round(this.sel.x * scaleX);
-      const vy1 = Math.round(this.sel.y * scaleY);
-      const vx2 = Math.round((this.sel.x + this.sel.w) * scaleX);
-      const vy2 = Math.round((this.sel.y + this.sel.h) * scaleY);
+      const f1 = this.localToFrame(s.x, s.y);
+      const f2 = this.localToFrame(s.x + s.w, s.y + s.h);
+      if (!f1 || !f2) { this.sel = null; return; }
+      const cl = (v, hi) => Math.max(0, Math.min(hi, Math.round(v)));
+      const vx1 = cl(f1.x, W), vy1 = cl(f1.y, H);
+      const vx2 = cl(f2.x, W), vy2 = cl(f2.y, H);
+      if (vx2 - vx1 < 4 || vy2 - vy1 < 4) { this.sel = null; this.$message.warning('选区太小，已忽略'); return; }
       this.set('region.left', vx1);
       this.set('region.right', W - vx2);
       this.set('region.up', vy1);
       this.set('region.down', H - vy2);
+      this.sel = null;
       this.$message.success('字幕区域已设置：up=' + this.cfg.region.up + ' down=' + this.cfg.region.down + ' left=' + this.cfg.region.left + ' right=' + this.cfg.region.right);
     },
     clearSel() {
@@ -471,22 +753,62 @@ const app = createApp({
       this.set('region.left', 0); this.set('region.right', 0);
       this.$message.success('已清除选区（恢复全屏）');
     },
-    syncSelFromRegion() {
-      // 视频打开/预览后，若已有 region 配置则显示对应选框
-      const W = this.vinfo && this.vinfo.width, H = this.vinfo && this.vinfo.height;
-      const r = this.cfg.region;
-      if (!W || !H) return;
-      const img = this.$refs.pimg;
-      if (!img) return;
-      const rect = img.getBoundingClientRect();
-      const scaleX = (rect.width / 3) / W;
-      const scaleY = rect.height / H;
-      const x1 = r.left * scaleX, y1 = r.up * scaleY;
-      const x2 = (W - r.right) * scaleX, y2 = (H - r.down) * scaleY;
-      if (x2 - x1 >= 4 && y2 - y1 >= 4) {
-        this.selStart = { x: x1, y: y1, rectW: rect.width, rectH: rect.height };
-        this.sel = { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
+    syncSelFromRegion() { this.$nextTick(() => this.measureViewport()); },
+    setPreviewMode(v) {
+      this.previewMode = v;
+      this.sel = null;
+      if (this.previewUrl) this.doPreview();
+    },
+    previewOcrResult() {
+      this.previewMode = 'ocr';
+      this.doPreview();
+    },
+    // ---- 自定义默认参数持久化（/api/config/file） ----
+    async loadUserConfig(silent) {
+      try {
+        const r = await this.api('/api/config/file');
+        this.cfgPath = r.path || '';
+        if (r.source === 'file' && r.config) {
+          this.mergeConfig(r.config);
+          this.cfgSource = 'file';
+          if (!silent) this.$message.success('已载入自定义默认参数');
+        } else {
+          this.cfgSource = 'default';
+          if (!silent) this.$message.info('尚无自定义配置，当前为出厂默认');
+        }
+      } catch (e) {
+        if (!silent) this.$message.error(e.message);
       }
+    },
+    mergeConfig(src) {
+      // 深合并：只覆盖界面已知字段，缺失/新增字段沿用当前值，跨版本安全
+      const walk = (s, d) => {
+        for (const k of Object.keys(s)) {
+          const sv = s[k];
+          if (sv && typeof sv === 'object' && !Array.isArray(sv) &&
+              d[k] && typeof d[k] === 'object' && !Array.isArray(d[k])) {
+            walk(sv, d[k]);
+          } else if (Object.prototype.hasOwnProperty.call(d, k)) {
+            d[k] = sv;
+          }
+        }
+      };
+      walk(src, this.cfg);
+    },
+    async saveUserConfig() {
+      try {
+        const r = await this.api('/api/config/file', { config: this.cfg });
+        this.cfgPath = r.path || this.cfgPath;
+        this.cfgSource = 'file';
+        this.$message.success('已保存为默认参数：' + (r.path || ''));
+      } catch (e) { this.$message.error(e.message); }
+    },
+    async resetUserConfig() {
+      try {
+        const r = await this.api('/api/config/default');
+        this.mergeConfig(r.config);
+        this.$message.success('已恢复出厂默认（点「保存为默认参数」后才会持久化）');
+      } catch (e) { this.$message.error(e.message); }
     },
     onPathInput(v) { this.videoPath = v; },
     async api(path, body) {
@@ -525,8 +847,17 @@ const app = createApp({
       try {
         const r = await this.api('/api/preview', {
           path: this.videoPath, frame: this.previewFrame,
-          config: this.cfg, region_only: this.regionOnly,
+          config: this.cfg, region_only: this.regionOnly, mode: this.previewMode,
         });
+        if (r.empty) {
+          if (this.previewUrl && this.previewUrl.startsWith('blob:')) URL.revokeObjectURL(this.previewUrl);
+          this.previewUrl = null;
+          this.previewMeta = null;
+          this.$message.warning(r.note || '当前帧未检出字幕');
+          this.previewing = false;
+          return;
+        }
+        this.previewMeta = r;
         // UI 自 0.4.0 起以 file:// 加载，后端返回的 /api/artifact?path=.. 相对路径会被
         // 解析成 file:///api/... 而请求不到后端（0.4.0-0.4.4 预览破图的根因）。
         // Electron 下统一经 IPC 取 PNG 二进制转 blob URL；浏览器直连后端的开发模式仍用相对路径。
@@ -541,7 +872,7 @@ const app = createApp({
         } else if (r.blob) {
           this.previewUrl = URL.createObjectURL(r.blob);
         }
-        this.$nextTick(() => this.syncSelFromRegion());
+        this.$nextTick(() => this.measureViewport());
       } catch (e) { this.$message.error(e.message); }
       this.previewing = false;
     },
@@ -770,35 +1101,36 @@ const app = createApp({
       const info = await this.api('/api/info');
       document.getElementById('apiInfo').textContent = '后端 ' + info.version;
     } catch (e) { document.getElementById('apiInfo').textContent = '后端未连接'; }
-    // 预览区选区拖拽（pointer 事件，兼容鼠标/触摸；window 级委托避免 v-if 挂载时机问题）
-    this.$nextTick(() => {
-      window.addEventListener('pointerdown', (e) => {
-        if (e.target && e.target.closest && e.target.closest('.preview-wrap')) this.onSelDown(e);
-      });
-      window.addEventListener('pointermove', (e) => this.onSelMove(e));
-      window.addEventListener('pointerup', (e) => {
-        this.onSelUp();
-        if (this.picking && e.target && e.target.closest && e.target.closest('.preview-wrap') && this.$refs.pimg) {
-          const img = this.$refs.pimg;
-          const rect = img.getBoundingClientRect();
-          const px = e.clientX - rect.left, py = e.clientY - rect.top;
-          if (px >= 0 && px <= rect.width / 3 && py >= 0 && py <= rect.height) {
-            const scaleX = this.vinfo.width / (rect.width / 3);
-            const scaleY = this.vinfo.height / rect.height;
-            const vx = Math.round(px * scaleX), vy = Math.round(py * scaleY);
-            this.fetchPixel(this.previewFrame, vx, vy).then(r => {
-              const isMain = this.picking === true;
-              this.set('filter.subtitle_color', r.rgb);
-              if (!isMain) this.set('filter.outline_color', r.rgb);
-              this.$message.success('已取色 RGB(' + r.rgb.join(',') + ') → ' + (isMain ? '字幕主色' : '描边色'));
-              this.picking = null;
-            }).catch(err => { this.$message.error(err.message); this.picking = null; });
-          }
-        }
-      });
+    // 查看器交互走 window 级委托：视图 v-if 挂载时机不稳定，且拖拽常越出容器
+    window.addEventListener('pointermove', (e) => this.movePan(e));
+    window.addEventListener('pointerup', () => this.endPan());
+    window.addEventListener('pointercancel', () => this.endPan());
+    window.addEventListener('resize', () => { this.measureViewport(); this.clampPan(); });
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && this.lightbox) this.lightbox = false;
+      if (e.key === '0' && this.previewUrl) this.fitView();
     });
+    // 取色：服务端读真实帧像素，不受预览着色影响；仅坐标由查看器变换反算
+    window.addEventListener('click', (e) => {
+      if (!this.picking || this.suppressClick || !this.vinfo) return;
+      const el = (e.target && e.target.closest) ? e.target.closest('.viewer, .lightbox .stage') : null;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      const f = this.localToFrame(e.clientX - rect.left, e.clientY - rect.top);
+      if (!f || f.x < 0 || f.y < 0 || f.x >= this.vinfo.width || f.y >= this.vinfo.height) return;
+      const vx = Math.round(f.x), vy = Math.round(f.y);
+      const isMain = this.picking === true;
+      this.fetchPixel(this.previewFrame, vx, vy).then(r => {
+        this.set('filter.subtitle_color', r.rgb);
+        if (!isMain) this.set('filter.outline_color', r.rgb);
+        this.$message.success('已取色 RGB(' + r.rgb.join(',') + ') -> ' + (isMain ? '字幕主色' : '描边色'));
+        this.picking = null;
+      }).catch(err => { this.$message.error(err.message); this.picking = null; });
+    });
+    await this.loadUserConfig(true);
   },
 });
+
 app.use(TDesign);
 app.mount('#app');
 </script>

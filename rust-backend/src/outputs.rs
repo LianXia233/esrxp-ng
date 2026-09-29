@@ -11,7 +11,7 @@ use std::path::Path;
 use anyhow::Result;
 use serde_json::json;
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, OcrConfig};
 use crate::ripper::SubtitleEvent;
 
 // ---------------------------------------------------------------- 时间码
@@ -396,12 +396,18 @@ fn encode_vobsub_frame(ev: &SubtitleEvent, main: (u8, u8, u8), outline: (u8, u8,
 }
 
 // ---------------------------------------------------------------- OCR PNG
-/// OCR 影像：白底黑字 PNG（对齐 esrXP [FOCRImage]：
-/// Subtitle Per Image（每图字幕数）/ Scale Subtitle（放大）/ Divid 2 lines（拆两行））。
+/// OCR 影像 / 字幕截图导出（对齐 esrXP [FOCRImage]：Subtitle Per Image /
+/// Scale Subtitle / Divid 2 lines；0.5.0 扩展渲染画质、后处理与输出格式）。
+///
+/// 画质要点：旧实现把二值 mask 按最近邻直接放大 → 边缘硬锯齿、放大后糊。
+/// 新流程：
+///   1. mask 双线性采样 + N×N 超采样 → 每个输出像素的「覆盖率」0..1（二值场 → 连续场）
+///   2. 按覆盖率在前景 / 背景色之间混合 → 边缘连续灰度，平滑且不失真
+///   3. color 模式取原视频像素做前景，保留硬字幕自身的高光与描边
 pub fn write_ocr_png(events: &[SubtitleEvent], cfg: &AppConfig, out_dir: &Path) -> Result<Vec<String>> {
     let ocr = &cfg.output.ocr;
-    let scale = ocr.scale.max(0.1);
     let per_image = ocr.per_image.max(1) as usize;
+    let ext = normalized_ext(&ocr.format);
     fs::create_dir_all(out_dir)?;
     let mut files = Vec::new();
     let mut img_idx = 0usize;
@@ -415,57 +421,390 @@ pub fn write_ocr_png(events: &[SubtitleEvent], cfg: &AppConfig, out_dir: &Path) 
             continue;
         }
         img_idx += 1;
+        let tiles: Vec<image::RgbaImage> = batch.iter()
+            .filter_map(|ev| render_subtitle_tile(ev, ocr))
+            .map(|t| apply_tile_postprocess(t, ocr))
+            .collect();
+        if tiles.is_empty() {
+            i += per_image;
+            continue;
+        }
         let gap = 4u32;
-        let total_w = batch.iter().fold(gap, |acc, ev| {
-            acc + (ev.image_w as f64 * scale).round() as u32 + gap
-        });
-        let max_h = batch.iter().map(|ev| {
-            (ev.image_h as f64 * scale).round() as u32
-        }).max().unwrap_or(1);
+        let total_w = tiles.iter().fold(gap, |acc, t| acc + t.width() + gap);
+        let max_h = tiles.iter().map(|t| t.height()).max().unwrap_or(1);
+        let bg = parse_hex_rgb(&ocr.bg_color, [255, 255, 255]);
         let mut img = image::RgbaImage::new(total_w.max(1), max_h.max(1));
         for p in img.pixels_mut() {
-            *p = image::Rgba([255, 255, 255, 255]);
+            *p = image::Rgba([bg[0], bg[1], bg[2], 255]);
         }
         let mut cx = gap;
-        for ev in batch {
-            let (w, h) = (ev.image_w, ev.image_h);
-            let nw = (w as f64 * scale).round() as u32;
-            let nh = (h as f64 * scale).round() as u32;
-            for y in 0..nh {
-                for x in 0..nw {
-                    let sx = ((x as f64) / scale).floor() as usize;
-                    let sy = ((y as f64) / scale).floor() as usize;
-                    let si = sy.min(h - 1) * w + sx.min(w - 1);
-                    let px = if ev.mask[si] > 0 {
-                        image::Rgba([0, 0, 0, 255])
-                    } else {
-                        image::Rgba([255, 255, 255, 255])
-                    };
-                    img.put_pixel(cx + x, y, px);
+        for t in &tiles {
+            for y in 0..t.height() {
+                for x in 0..t.width() {
+                    if cx + x < img.width() {
+                        img.put_pixel(cx + x, y, *t.get_pixel(x, y));
+                    }
                 }
             }
-            cx += nw + gap;
+            cx += t.width() + gap;
         }
+        let img = apply_canvas_postprocess(img, ocr);
         // Divid each subtitle into 2 lines：若存在整行空白带（两行字幕），拆成上下两张
-        let p = out_dir.join(format!("subtitle_{:04}.png", img_idx));
         if ocr.divid_into_2_lines && max_h >= 12 {
             if let Some(split_y) = find_blank_split(&img) {
                 let (top, bottom) = split_vertical(&img, split_y);
-                let pt = out_dir.join(format!("subtitle_{:04}_top.png", img_idx));
-                let pb = out_dir.join(format!("subtitle_{:04}_bottom.png", img_idx));
-                top.save(&pt)?;
-                bottom.save(&pb)?;
+                let pt = out_dir.join(format!("subtitle_{:04}_top.{ext}", img_idx));
+                let pb = out_dir.join(format!("subtitle_{:04}_bottom.{ext}", img_idx));
+                save_image(&top, &pt, &ext, ocr.quality)?;
+                save_image(&bottom, &pb, &ext, ocr.quality)?;
                 files.push(pt.display().to_string());
                 files.push(pb.display().to_string());
                 i += per_image;
                 continue;
             }
         }
-        img.save(&p)?;
+        let p = out_dir.join(format!("subtitle_{:04}.{ext}", img_idx));
+        save_image(&img, &p, &ext, ocr.quality)?;
         files.push(p.display().to_string());
         i += per_image;
     }
     Ok(files)
+}
+
+/// 归一化扩展名：jpg/jpeg → jpg，bmp → bmp，其余一律 png（避免非法扩展名落到磁盘）。
+fn normalized_ext(fmt: &str) -> String {
+    let f = fmt.trim().trim_start_matches('.').to_ascii_lowercase();
+    match f.as_str() {
+        "jpg" | "jpeg" => "jpg".into(),
+        "bmp" => "bmp".into(),
+        _ => "png".into(),
+    }
+}
+
+/// 解析 #RRGGBB 颜色；非法输入回退到默认色（避免单字符失误让整批导出失败）。
+fn parse_hex_rgb(s: &str, default: [u8; 3]) -> [u8; 3] {
+    let t = s.trim().trim_start_matches('#');
+    if t.len() != 6 || !t.chars().all(|c| c.is_ascii_hexdigit()) {
+        return default;
+    }
+    let mut out = default;
+    for i in 0..3usize {
+        if let Ok(v) = u8::from_str_radix(&t[i * 2..i * 2 + 2], 16) {
+            out[i] = v;
+        }
+    }
+    out
+}
+
+/// mask 双线性采样：返回该点覆盖率 0.0..1.0。
+/// 把二值 mask 变成连续场，任意缩放倍率都能得到平滑边缘（这是「不再有锯齿」的前提）。
+fn sample_mask(mask: &[u8], w: usize, h: usize, fx: f64, fy: f64) -> f64 {
+    if w == 0 || h == 0 || mask.len() < w * h {
+        return 0.0;
+    }
+    let x = fx.clamp(0.0, w as f64 - 1.0);
+    let y = fy.clamp(0.0, h as f64 - 1.0);
+    let x0 = x.floor() as usize;
+    let y0 = y.floor() as usize;
+    let x1 = (x0 + 1).min(w - 1);
+    let y1 = (y0 + 1).min(h - 1);
+    let tx = x - x0 as f64;
+    let ty = y - y0 as f64;
+    let g = |ix: usize, iy: usize| -> f64 {
+        if mask[iy * w + ix] > 0 { 1.0 } else { 0.0 }
+    };
+    let a = g(x0, y0) * (1.0 - tx) + g(x1, y0) * tx;
+    let b = g(x0, y1) * (1.0 - tx) + g(x1, y1) * tx;
+    a * (1.0 - ty) + b * ty
+}
+
+/// 原视频 RGB 双线性采样（color 模式取真实前景色时使用）。
+fn sample_rgb(img: &[u8], w: usize, h: usize, fx: f64, fy: f64) -> (f64, f64, f64) {
+    if w == 0 || h == 0 || img.len() < w * h * 3 {
+        return (0.0, 0.0, 0.0);
+    }
+    let x = fx.clamp(0.0, w as f64 - 1.0);
+    let y = fy.clamp(0.0, h as f64 - 1.0);
+    let x0 = x.floor() as usize;
+    let y0 = y.floor() as usize;
+    let x1 = (x0 + 1).min(w - 1);
+    let y1 = (y0 + 1).min(h - 1);
+    let tx = x - x0 as f64;
+    let ty = y - y0 as f64;
+    let mut out = (0.0, 0.0, 0.0);
+    for c in 0..3usize {
+        let g = |ix: usize, iy: usize| -> f64 { img[(iy * w + ix) * 3 + c] as f64 };
+        let a = g(x0, y0) * (1.0 - tx) + g(x1, y0) * tx;
+        let b = g(x0, y1) * (1.0 - tx) + g(x1, y1) * tx;
+        let v = a * (1.0 - ty) + b * ty;
+        if c == 0 { out.0 = v; } else if c == 1 { out.1 = v; } else { out.2 = v; }
+    }
+    out
+}
+
+/// 由 ROI 原图 + 掩码现场构造一条字幕事件（供预览「导出效果」复用导出管线）。
+/// 语义与抓取产出的 SubtitleEvent 一致：mask / image 均按命中区域 bbox 裁切。
+pub fn event_from_roi(rgb: &[u8], rw: usize, rh: usize, mask: &[u8]) -> Option<SubtitleEvent> {
+    if rw == 0 || rh == 0 || mask.len() < rw * rh || rgb.len() < rw * rh * 3 {
+        return None;
+    }
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (rw as i64, rh as i64, -1i64, -1i64);
+    for (i, v) in mask.iter().enumerate() {
+        if *v > 0 {
+            let x = (i % rw) as i64;
+            let y = (i / rw) as i64;
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+    }
+    if max_x < 0 || max_y < 0 {
+        return None;
+    }
+    let (bw, bh) = (max_x - min_x + 1, max_y - min_y + 1);
+    let mut sub_mask = vec![0u8; (bw * bh) as usize];
+    let mut image = Vec::with_capacity((bw * bh * 3) as usize);
+    for y in min_y..max_y + 1 {
+        for x in min_x..max_x + 1 {
+            let si = (y as usize) * rw + x as usize;
+            sub_mask[((y - min_y) as usize) * bw as usize + (x - min_x) as usize] = mask[si];
+            let ps = si * 3;
+            image.extend_from_slice(&rgb[ps..ps + 3]);
+        }
+    }
+    Some(SubtitleEvent {
+        start: 0.0, end: 0.0, start_frame: 0, end_frame: 0,
+        image, image_w: bw as usize, image_h: bh as usize,
+        mask: sub_mask, roi_mask: mask.to_vec(), roi_w: rw, roi_h: rh,
+        bbox: (min_x, min_y, bw, bh), roi_origin: (0, 0),
+        diff_frames: 0, source_frame: 0, deleted: false,
+    })
+}
+
+/// 单条字幕位图重建（含缩放）：以 mask 覆盖率驱动的抗锯齿合成取代二值放大。
+pub fn render_subtitle_tile(ev: &SubtitleEvent, ocr: &OcrConfig) -> Option<image::RgbaImage> {
+    let (sw, sh) = (ev.image_w, ev.image_h);
+    if sw == 0 || sh == 0 {
+        return None;
+    }
+    let scale = ocr.scale.max(0.1);
+    let dw = ((sw as f64) * scale).round().max(1.0) as usize;
+    let dh = ((sh as f64) * scale).round().max(1.0) as usize;
+    let fgc = parse_hex_rgb(&ocr.text_color, [0, 0, 0]);
+    let bgc = parse_hex_rgb(&ocr.bg_color, [255, 255, 255]);
+    let mode = ocr.color_mode.trim().to_ascii_lowercase();
+    // color 模式需要真实像素；旧工程缺 image 时自动降级为前景/背景双色混合
+    let use_pixels = mode == "color" && ev.image.len() >= sw * sh * 3;
+    let ss = if ocr.antialias { ocr.supersample.clamp(1, 4) as usize } else { 1usize };
+    let step = 1.0 / ss as f64;
+    let inv = step * step;
+    let mut out = image::RgbaImage::new(dw as u32, dh as u32);
+    for y in 0..dh {
+        for x in 0..dw {
+            let mut cov = 0.0f64;
+            let mut sr = 0.0f64;
+            let mut sg = 0.0f64;
+            let mut sb = 0.0f64;
+            for sy in 0..ss {
+                for sx in 0..ss {
+                    let px = (x as f64 + (sx as f64 + 0.5) * step) / scale - 0.5;
+                    let py = (y as f64 + (sy as f64 + 0.5) * step) / scale - 0.5;
+                    cov += sample_mask(&ev.mask, sw, sh, px, py);
+                    if use_pixels {
+                        let (r, g, b) = sample_rgb(&ev.image, sw, sh, px, py);
+                        sr += r;
+                        sg += g;
+                        sb += b;
+                    }
+                }
+            }
+            let cov = (cov * inv).clamp(0.0, 1.0);
+            // binary 为旧二值行为（硬边），其余模式按覆盖率连续混合
+            let alpha = if mode == "binary" {
+                if cov >= 0.5 { 1.0 } else { 0.0 }
+            } else {
+                cov
+            };
+            let (fr, fgr, fb) = if use_pixels {
+                (sr * inv, sg * inv, sb * inv)
+            } else {
+                (fgc[0] as f64, fgc[1] as f64, fgc[2] as f64)
+            };
+            let mix = |c: f64, b: f64| -> u8 {
+                (c * alpha + b * (1.0 - alpha)).clamp(0.0, 255.0).round() as u8
+            };
+            out.put_pixel(x as u32, y as u32, image::Rgba([
+                mix(fr, bgc[0] as f64),
+                mix(fgr, bgc[1] as f64),
+                mix(fb, bgc[2] as f64),
+                255,
+            ]));
+        }
+    }
+    Some(out)
+}
+
+/// 单条字幕后处理：裁剪 → 留边（单位均为输出像素，UI 所见即所得）。
+pub fn apply_tile_postprocess(img: image::RgbaImage, ocr: &OcrConfig) -> image::RgbaImage {
+    let (ct, cb, cl, cr) = (ocr.crop_top.max(0), ocr.crop_bottom.max(0),
+                            ocr.crop_left.max(0), ocr.crop_right.max(0));
+    let pad = ocr.padding.max(0) as u32;
+    if ct == 0 && cb == 0 && cl == 0 && cr == 0 && pad == 0 {
+        return img;
+    }
+    let (w, h) = (img.width() as i64, img.height() as i64);
+    let x0 = cl.min(w.saturating_sub(1));
+    let y0 = ct.min(h.saturating_sub(1));
+    let cw = ((w - cr) - x0).max(1) as u32;
+    let ch = ((h - cb) - y0).max(1) as u32;
+    let mut cropped = image::RgbaImage::new(cw, ch);
+    for y in 0..ch {
+        for x in 0..cw {
+            cropped.put_pixel(x, y, *img.get_pixel(x0 as u32 + x, y0 as u32 + y));
+        }
+    }
+    if pad == 0 {
+        return cropped;
+    }
+    let bg = parse_hex_rgb(&ocr.bg_color, [255, 255, 255]);
+    let mut out = image::RgbaImage::new(cw + pad * 2, ch + pad * 2);
+    for p in out.pixels_mut() {
+        *p = image::Rgba([bg[0], bg[1], bg[2], 255]);
+    }
+    for y in 0..ch {
+        for x in 0..cw {
+            out.put_pixel(x + pad, y + pad, *cropped.get_pixel(x, y));
+        }
+    }
+    out
+}
+
+/// 整图后处理：旋转 / 镜像 → 色调（亮度、对比度、灰度）→ 最大宽度限制。
+pub fn apply_canvas_postprocess(img: image::RgbaImage, ocr: &OcrConfig) -> image::RgbaImage {
+    let mut img = img;
+    let rot = ((ocr.rotate % 360) + 360) % 360;
+    img = match rot {
+        90 => img_rotate_cw(&img),
+        180 => img_rotate_180(&img),
+        270 => img_rotate_ccw(&img),
+        _ => img,
+    };
+    if ocr.flip_h { img = img_flip_h(&img); }
+    if ocr.flip_v { img = img_flip_v(&img); }
+    if ocr.brightness != 0 || ocr.contrast != 0 || ocr.grayscale {
+        img = img_tone(&img, ocr.brightness, ocr.contrast, ocr.grayscale);
+    }
+    let mw = ocr.max_width.max(0) as u32;
+    if mw > 0 && img.width() > mw {
+        let nh = ((img.height() as f64) * (mw as f64 / img.width() as f64)).round().max(1.0) as u32;
+        img = image::imageops::resize(&img, mw, nh, filter_from_name(&ocr.scale_filter));
+    }
+    img
+}
+
+fn img_rotate_cw(img: &image::RgbaImage) -> image::RgbaImage {
+    let (w, h) = (img.width(), img.height());
+    let mut out = image::RgbaImage::new(h, w);
+    for y in 0..h {
+        for x in 0..w {
+            out.put_pixel(h - 1 - y, x, *img.get_pixel(x, y));
+        }
+    }
+    out
+}
+
+fn img_rotate_ccw(img: &image::RgbaImage) -> image::RgbaImage {
+    let (w, h) = (img.width(), img.height());
+    let mut out = image::RgbaImage::new(h, w);
+    for y in 0..h {
+        for x in 0..w {
+            out.put_pixel(y, w - 1 - x, *img.get_pixel(x, y));
+        }
+    }
+    out
+}
+
+fn img_rotate_180(img: &image::RgbaImage) -> image::RgbaImage {
+    let (w, h) = (img.width(), img.height());
+    let mut out = image::RgbaImage::new(w, h);
+    for y in 0..h {
+        for x in 0..w {
+            out.put_pixel(w - 1 - x, h - 1 - y, *img.get_pixel(x, y));
+        }
+    }
+    out
+}
+
+fn img_flip_h(img: &image::RgbaImage) -> image::RgbaImage {
+    let (w, h) = (img.width(), img.height());
+    let mut out = image::RgbaImage::new(w, h);
+    for y in 0..h {
+        for x in 0..w {
+            out.put_pixel(w - 1 - x, y, *img.get_pixel(x, y));
+        }
+    }
+    out
+}
+
+fn img_flip_v(img: &image::RgbaImage) -> image::RgbaImage {
+    let (w, h) = (img.width(), img.height());
+    let mut out = image::RgbaImage::new(w, h);
+    for y in 0..h {
+        for x in 0..w {
+            out.put_pixel(x, h - 1 - y, *img.get_pixel(x, y));
+        }
+    }
+    out
+}
+
+/// 亮度 / 对比度 / 灰度：对比度采用标准系数 f = 259(c+255) / 255(259-c)。
+fn img_tone(img: &image::RgbaImage, brightness: i64, contrast: i64, grayscale: bool) -> image::RgbaImage {
+    let b = brightness.clamp(-100, 100) as f64;
+    let c = (contrast.clamp(-100, 100) as f64) * 2.55;
+    let f = (259.0 * (c + 255.0)) / (255.0 * (259.0 - c));
+    let mut out = img.clone();
+    for p in out.pixels_mut() {
+        let (r0, g0, b0) = (p[0] as f64, p[1] as f64, p[2] as f64);
+        let (mut r, mut g, mut bl) = (
+            (f * (r0 - 128.0) + 128.0 + b).clamp(0.0, 255.0),
+            (f * (g0 - 128.0) + 128.0 + b).clamp(0.0, 255.0),
+            (f * (b0 - 128.0) + 128.0 + b).clamp(0.0, 255.0),
+        );
+        if grayscale {
+            let l = 0.299 * r + 0.587 * g + 0.114 * bl;
+            r = l;
+            g = l;
+            bl = l;
+        }
+        *p = image::Rgba([r.round() as u8, g.round() as u8, bl.round() as u8, p[3]]);
+    }
+    out
+}
+
+fn filter_from_name(name: &str) -> image::imageops::FilterType {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "nearest" => image::imageops::FilterType::Nearest,
+        "triangle" | "bilinear" => image::imageops::FilterType::Triangle,
+        "catmullrom" | "bicubic" => image::imageops::FilterType::CatmullRom,
+        "gaussian" => image::imageops::FilterType::Gaussian,
+        _ => image::imageops::FilterType::Lanczos3,
+    }
+}
+
+/// 按配置格式与质量写盘：PNG / BMP 无损（quality 忽略），JPG 走指定质量编码。
+fn save_image(img: &image::RgbaImage, path: &Path, fmt: &str, quality: i64) -> Result<()> {
+    if normalized_ext(fmt) == "jpg" {
+        let q = quality.clamp(1, 100) as u8;
+        // JpegEncoder 仅接受 L8 / Rgb8，故先去掉 alpha 通道
+        let rgb = image::DynamicImage::ImageRgba8(img.clone()).to_rgb8();
+        let mut f = fs::File::create(path)?;
+        let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut f, q);
+        enc.encode(rgb.as_raw(), rgb.width(), rgb.height(), image::ExtendedColorType::Rgb8)?;
+    } else {
+        img.save(path)?;
+    }
+    Ok(())
 }
 
 /// 找整行全白（空白）横带；返回中心 y（用于拆两行）。找不到返回 None。
@@ -547,21 +886,15 @@ pub fn write_srt_bitmap(events: &[SubtitleEvent], cfg: &AppConfig, out: &Path) -
         if ev.mask.is_empty() || !ev.mask.iter().any(|v| *v > 0) {
             continue;
         }
-        let (w, h) = (ev.image_w, ev.image_h);
-        let mut img = image::RgbaImage::new(w.max(1) as u32, h.max(1) as u32);
-        for y in 0..h {
-            for x in 0..w {
-                let si = y * w + x;
-                let px = if ev.mask[si] > 0 {
-                    image::Rgba([0, 0, 0, 255])
-                } else {
-                    image::Rgba([255, 255, 255, 255])
-                };
-                img.put_pixel(x as u32, y as u32, px);
-            }
-        }
+        let ocr = &cfg.output.ocr;
+        let tile = match render_subtitle_tile(ev, ocr) {
+            Some(t) => t,
+            None => continue,
+        };
+        // 文件名维持 .bmp：SubRip 位图约定，管内 Flag=Mem 引用外部文件；渲染质量由新模式保证
+        let img = apply_canvas_postprocess(apply_tile_postprocess(tile, ocr), ocr);
         let p = dir.join(format!("{:05}.bmp", i + 1));
-        img.save(&p)?;
+        save_image(&img, &p, "bmp", ocr.quality)?;
         files.push(p.display().to_string());
     }
     Ok((dir.display().to_string(), files))

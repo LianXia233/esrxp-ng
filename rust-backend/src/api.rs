@@ -54,6 +54,7 @@ pub struct PreviewReq {
     pub frame: i64,
     pub config: Value,
     pub region_only: Option<bool>,
+    pub mode: Option<String>,   // 构图模式：combo(默认) / raw / mask / overlay
 }
 
 #[derive(Deserialize)]
@@ -148,6 +149,8 @@ pub fn router(ui_dir: String, cache_dir: String) -> Router {
         .route("/api/manager/merge_repeat", post(api_manager_merge_repeat))
         .route("/api/manager/export", post(api_manager_export))
         .route("/api/project/open", post(api_project_open))
+        .route("/api/config/default", get(api_config_default))
+        .route("/api/config/file", get(api_config_file).post(api_config_save))
         .route("/api/artifact", get(api_artifact))
         .fallback_service(ServeDir::new(&ui_dir2))
         .layer(cors)
@@ -231,8 +234,47 @@ async fn api_preview(State(st): State<AppState>, Json(req): Json<PreviewReq>) ->
         let (roi, rw, rh, origin) = crate::ripper::prepare_roi(&fd, &cfg);
         let mask = crate::postprocess::clean(
             &crate::gpu::kernels().filter(&roi, rw, rh, &cfg.filter), rw, rh, &cfg.postprocess);
-        let (base, m, mw, mh, ox, oy) = if req.region_only.unwrap_or(false) {
-            (roi, mask, rw, rh, 0i64, 0i64)
+        // 构图模式：raw（默认，整帧原图）/ overlay / mask / combo（三列）
+        // / ocr（导出效果：与导出完全一致的渲染 + 后处理管线）
+        let mode = req.mode.clone().unwrap_or_else(|| "raw".into())
+            .trim().to_ascii_lowercase();
+        if mode == "ocr" {
+            let ocr = &cfg.output.ocr;
+            let tile = crate::outputs::event_from_roi(&roi, rw, rh, &mask)
+                .and_then(|ev| crate::outputs::render_subtitle_tile(&ev, ocr))
+                .map(|t| crate::outputs::apply_canvas_postprocess(
+                    crate::outputs::apply_tile_postprocess(t, ocr), ocr));
+            let tile = match tile {
+                Some(t) => t,
+                None => return Ok(json!({
+                    "mode": "ocr", "empty": true, "frame": fd.index, "time": fd.time,
+                    "note": "当前帧该区域未检出字幕：换个帧或调整过滤参数",
+                })),
+            };
+            let (tw, th) = (tile.width(), tile.height());
+            let seq = PREVIEW_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if seq >= 32 {
+                let _ = std::fs::remove_file(Path::new(&cache).join(format!("preview_ocr_{}.png", seq - 32)));
+            }
+            let p = Path::new(&cache).join(format!("preview_ocr_{seq}.png"));
+            tile.save(&p).map_err(|e| e.to_string())?;
+            return Ok(json!({
+                "image": format!("/api/artifact?path={}", p.display()),
+                "image_path": p.display().to_string(),
+                "frame": fd.index, "time": fd.time,
+                "mode": "ocr", "empty": false,
+                "width": tw, "height": th,
+                "roi_w": rw, "roi_h": rh,
+                "roi_origin": [origin.0, origin.1],
+                "roi_scale": cfg.region.scale * cfg.preview.scale_video.max(0.05),
+                "region_only": true,
+                "frame_width": fd.width, "frame_height": fd.height,
+            }));
+        }
+        let use_roi = req.region_only.unwrap_or(false);
+        // 借用复用整帧 / ROI 像素（不再复制整帧 RGB，降低抓取期内存峰值）
+        let (base, m, mw, mh): (&[u8], Vec<u8>, usize, usize) = if use_roi {
+            (&roi[..], mask.clone(), rw, rh)
         } else {
             let mut full_mask = vec![0u8; fd.width * fd.height];
             for y in 0..rh {
@@ -242,30 +284,31 @@ async fn api_preview(State(st): State<AppState>, Json(req): Json<PreviewReq>) ->
                     }
                 }
             }
-            (fd.rgb.clone(), full_mask, fd.width, fd.height, 0i64, 0i64)
+            (&fd.rgb[..], full_mask, fd.width, fd.height)
         };
-        let _ = (ox, oy);
-        // 拼接：左原图 | 中 mask | 右叠加
-        let pw = mw + mw + mw;
+        let pw = if mode == "combo" { mw * 3 } else { mw };
         let ph = mh;
-        let mut img = image::RgbaImage::new(pw as u32, ph as u32);
-        // 三列直接写：左原图 | 中 mask（白=命中） | 叠加（命中保留原色）
+        let mut img = image::RgbaImage::new(pw.max(1) as u32, ph.max(1) as u32);
         for y in 0..ph {
             for x in 0..mw {
                 let src = y * mw + x;
                 let ps = src * 3;
                 let (r, g, b) = (base[ps], base[ps + 1], base[ps + 2]);
-                img.put_pixel(x as u32, y as u32, image::Rgba([r, g, b, 255]));
-                // 中列：mask（白=命中）
-                let mv = if m[src] > 0 { 255u8 } else { 0u8 };
-                img.put_pixel((mw + x) as u32, y as u32, image::Rgba([mv, mv, mv, 255]));
-                // 右列：叠加（命中保留原色，未命中绿色调）
-                let (r2, g2, b2) = if m[src] > 0 {
-                    (r, g, b)
+                let hit = m[src] > 0;
+                let mv = if hit { 255u8 } else { 0u8 };
+                if mode == "raw" {
+                    img.put_pixel(x as u32, y as u32, image::Rgba([r, g, b, 255]));
+                } else if mode == "mask" {
+                    img.put_pixel(x as u32, y as u32, image::Rgba([mv, mv, mv, 255]));
+                } else if mode == "overlay" {
+                    let (r2, g2, b2) = overlay_pixel(r, g, b, hit);
+                    img.put_pixel(x as u32, y as u32, image::Rgba([r2, g2, b2, 255]));
                 } else {
-                    (r.saturating_mul(2).min(255) / 2 + 30, (g as u16 + 90).min(255) as u8, b.saturating_mul(2).min(255) / 2)
-                };
-                img.put_pixel((mw * 2 + x) as u32, y as u32, image::Rgba([r2, g2.clamp(0, 255), b2, 255]));
+                    img.put_pixel(x as u32, y as u32, image::Rgba([r, g, b, 255]));
+                    img.put_pixel((mw + x) as u32, y as u32, image::Rgba([mv, mv, mv, 255]));
+                    let (r2, g2, b2) = overlay_pixel(r, g, b, hit);
+                    img.put_pixel((mw * 2 + x) as u32, y as u32, image::Rgba([r2, g2, b2, 255]));
+                }
             }
         }
         let seq = PREVIEW_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -280,6 +323,13 @@ async fn api_preview(State(st): State<AppState>, Json(req): Json<PreviewReq>) ->
             // Electron 侧经 IPC 取二进制（浏览器直连开发模式仍可用上面的相对路径）
             "image_path": p.display().to_string(),
             "frame": fd.index, "time": fd.time,
+            "mode": mode,
+            "width": pw, "height": ph,
+            "roi_w": rw, "roi_h": rh,
+            "roi_origin": [origin.0, origin.1],
+            "roi_scale": cfg.region.scale * cfg.preview.scale_video.max(0.05),
+            "region_only": use_roi,
+            "frame_width": fd.width, "frame_height": fd.height,
         }))
     })
     .await;
@@ -287,6 +337,85 @@ async fn api_preview(State(st): State<AppState>, Json(req): Json<PreviewReq>) ->
         Ok(Ok(v)) => Json(v).into_response(),
         Ok(Err(e)) => err_response(&e),
         Err(e) => err_response(&e.to_string()),
+    }
+}
+
+/// 叠加预览着色：命中保留原色，未命中叠绿色调（未命中区域一眼可辨）。
+#[inline]
+fn overlay_pixel(r: u8, g: u8, b: u8, hit: bool) -> (u8, u8, u8) {
+    if hit {
+        (r, g, b)
+    } else {
+        (r.saturating_mul(2).min(255) / 2 + 30,
+         (g as u16 + 90).min(255) as u8,
+         b.saturating_mul(2).min(255) / 2)
+    }
+}
+
+/// 用户自定义默认配置落盘位置：<cache_dir 父目录>/esrxp-config.json
+fn user_config_path(st: &AppState) -> PathBuf {
+    Path::new(&st.cache_dir)
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("esrxp-config.json")
+}
+
+/// GET /api/config/default —— 内置出厂默认配置
+async fn api_config_default() -> Response {
+    match serde_json::to_value(AppConfig::default()) {
+        Ok(v) => Json(json!({ "config": v, "source": "default" })).into_response(),
+        Err(e) => err_response(&format!("默认配置序列化失败: {e}")),
+    }
+}
+
+/// GET /api/config/file —— 读取持久化的自定义默认配置；文件缺失时回退出厂默认
+async fn api_config_file(State(st): State<AppState>) -> Response {
+    let p = user_config_path(&st);
+    let path_s = p.display().to_string();
+    if !p.is_file() {
+        return match serde_json::to_value(AppConfig::default()) {
+            Ok(v) => Json(json!({ "config": v, "source": "default", "path": path_s })).into_response(),
+            Err(e) => err_response(&format!("默认配置序列化失败: {e}")),
+        };
+    }
+    match std::fs::read_to_string(&p) {
+        Ok(s) => match serde_json::from_str::<AppConfig>(&s) {
+            Ok(cfg) => Json(json!({ "config": cfg, "source": "file", "path": path_s })).into_response(),
+            Err(e) => err_response(&format!("配置文件解析失败，请删除后重试: {e}")),
+        },
+        Err(e) => err_response(&format!("配置文件读取失败: {e}")),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct ConfigSaveReq {
+    pub config: Option<Value>,
+}
+
+/// POST /api/config/file —— 保存自定义默认配置（反序列化归一化后再写盘）
+async fn api_config_save(State(st): State<AppState>, Json(req): Json<ConfigSaveReq>) -> Response {
+    let p = user_config_path(&st);
+    let value = match req.config {
+        Some(v) => v,
+        None => return err_response("缺少 config 字段"),
+    };
+    // 反序列化再序列化：剔除未知/非法字段并按 AppConfig 结构归一化，保证跨版本可读
+    let cfg: AppConfig = match serde_json::from_value(value) {
+        Ok(c) => c,
+        Err(e) => return err_response(&format!("配置非法: {e}")),
+    };
+    let text = match serde_json::to_string_pretty(&cfg) {
+        Ok(t) => t,
+        Err(e) => return err_response(&format!("配置序列化失败: {e}")),
+    };
+    if let Some(parent) = p.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            return err_response(&format!("配置目录创建失败: {e}"));
+        }
+    }
+    match std::fs::write(&p, text) {
+        Ok(_) => Json(json!({ "ok": true, "path": p.display().to_string() })).into_response(),
+        Err(e) => err_response(&format!("配置保存失败: {e}")),
     }
 }
 
