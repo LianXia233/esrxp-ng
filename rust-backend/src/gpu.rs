@@ -186,7 +186,10 @@ impl CudaKernels {
 
     fn launch(&self, f: CUfunction, n: usize, block: u32, args: &[CUdeviceptr]) -> bool {
         let bx = (n as u32).div_ceil(block);
-        let mut params: Vec<*mut c_void> = args.iter().map(|a| (*a) as usize as *mut c_void).collect();
+        // cuLaunchKernel 的 kernelParams 是「指向每个参数值」的指针数组：
+        // 每个元素必须指向参数的存储位置（这里指向 args 切片里的 u64），
+        // 而非把参数值本身强转成指针（那样驱动会按宿主地址解引用 → 崩溃/乱码）。
+        let mut params: Vec<*mut c_void> = args.iter().map(|a| a as *const u64 as *mut c_void).collect();
         match unsafe { self._lib.get::<unsafe extern "C" fn(
                 CUfunction, u32, u32, u32, u32, u32, u32, u32, *mut CUdeviceptr, *mut *mut c_void) -> i32>(b"cuLaunchKernel\0") } {
             Ok(launch) => unsafe {
@@ -410,7 +413,8 @@ const PTX: &str = r#"
     .param .u32 n, .param .u32 thr)
 {
     .reg .u32 tid, d0, d1, d2, md;
-    .reg .u64 p, c, o, cb;
+    .reg .u32 r1u, g1u, b1u, r2u, g2u, b2u;
+    .reg .u64 p, c, o, cb, off;
     .reg .u8 r1, g1, b1, r2, g2, b2;
     .reg .pred hit;
     cvta.to.global.u64 p, [prev];
@@ -422,18 +426,24 @@ const PTX: &str = r#"
     add.u32 tid, tid, %tid.x;
     setp.ge.u32 hit, tid, n;
     @hit bra RET;
-    // 读 6 字节
-    mul.wide.u32 p, tid, 3;
-    mul.wide.u32 c, tid, 3;
-    ld.global.u8 r1, [p + p];
-    ld.global.u8 g1, [p + p + 1];
-    ld.global.u8 b1, [p + p + 2];
-    ld.global.u8 r2, [c + c];
-    ld.global.u8 g2, [c + c + 1];
-    ld.global.u8 b2, [c + c + 2];
-    abs.diff.u32 d0, r1, r2;
-    abs.diff.u32 d1, g1, g2;
-    abs.diff.u32 d2, b1, b2;
+    // 读 6 字节（off 为字节偏移；p/c 保持基址，不得复用寄存器覆盖）
+    mul.wide.u32 off, tid, 3;
+    ld.global.u8 r1, [p + off];
+    ld.global.u8 g1, [p + off + 1];
+    ld.global.u8 b1, [p + off + 2];
+    ld.global.u8 r2, [c + off];
+    ld.global.u8 g2, [c + off + 1];
+    ld.global.u8 b2, [c + off + 2];
+    // 窄类型先升到 u32（abs.diff 只支持 32/64 位操作数）
+    cvt.u32.u8 r1u, r1;
+    cvt.u32.u8 g1u, g1;
+    cvt.u32.u8 b1u, b1;
+    cvt.u32.u8 r2u, r2;
+    cvt.u32.u8 g2u, g2;
+    cvt.u32.u8 b2u, b2;
+    abs.diff.u32 d0, r1u, r2u;
+    abs.diff.u32 d1, g1u, g2u;
+    abs.diff.u32 d2, b1u, b2u;
     max.u32 md, d0, d1;
     max.u32 md, md, d2;
     setp.gt.u32 hit, md, thr;
@@ -446,15 +456,15 @@ RET:
 }
 
 // ---------- filter_kernel ----------
-// segbase: u32[48]，每段 16：0=enable_rgb 1..3=rgb 4=diff2 5=enable_hue
-// 6=hue180 7=hue_diff 8..11=lum_min/max+en 12..15=sat_min/max+en
+// segbase: u32[48]（192 字节），每段 16 u32：0=enable_rgb 1..3=rgb 4=diff2 5=enable_hue
+// 6=hue180 7=hue_diff 8..11=lum_min/max+en 12..15=sat_min/max+en；base 为字节偏移，步进 64
 .visible .entry filter_kernel(
     .param .u64 rgb, .param .u64 mask, .param .u64 segbase,
     .param .u32 w, .param .u32 h, .param .u32 n)
 {
     .reg .u32 tid, r, g, b, mx, mn, d, hsv_s, hsv_v, hue, hue180;
-    .reg .u32 en, rr, gg, bb, d2, e, v, s, base, dd, dr, dg, db;
-    .reg .u64 p, o, sb;
+    .reg .u32 en, rr, gg, bb, d2, e, v, s, dd, dr, dg, db;
+    .reg .u64 p, o, sb, base, off;
     .reg .u8 r8, g8, b8;
     .reg .pred hit, ok;
     cvta.to.global.u64 p, [rgb];
@@ -465,13 +475,13 @@ RET:
     add.u32 tid, tid, %tid.x;
     setp.ge.u32 hit, tid, n;
     @hit bra RET;
-    mul.wide.u32 p, tid, 3;
-    ld.global.u8 r8, [p + p];
-    ld.global.u8 g8, [p + p + 1];
-    ld.global.u8 b8, [p + p + 2];
-    mov.u32 r, r8;
-    mov.u32 g, g8;
-    mov.u32 b, b8;
+    mul.wide.u32 off, tid, 3;
+    ld.global.u8 r8, [p + off];
+    ld.global.u8 g8, [p + off + 1];
+    ld.global.u8 b8, [p + off + 2];
+    cvt.u32.u8 r, r8;
+    cvt.u32.u8 g, g8;
+    cvt.u32.u8 b, b8;
     // max/min
     max.u32 mx, r, g;
     max.u32 mx, mx, b;
@@ -481,7 +491,7 @@ RET:
     mov.u32 hue, 0;
     setp.eq.u32 ok, d, 0;
     @!ok {
-        // r==mx: h=((g-b)*60)/d ; g==mx: +120 ; b==mx: +240
+        // r==mx: h=((g-b)*60)/d ; g==mx: +120 ; b==mx: +240（先除后加，与 CPU 逐位一致）
         setp.eq.u32 ok, r, mx;
         @ok {
             sub.u32 dd, g, b;
@@ -492,17 +502,19 @@ RET:
             setp.eq.u32 ok, g, mx;
             @ok {
                 sub.u32 dd, b, r;
-                mad.lo.s32 hue, dd, 60, 120;
+                mad.lo.s32 hue, dd, 60, 0;
                 div.s32 hue, hue, d;
+                add.u32 hue, hue, 120;
             }
             @!ok {
                 sub.u32 dd, r, g;
-                mad.lo.s32 hue, dd, 60, 240;
+                mad.lo.s32 hue, dd, 60, 0;
                 div.s32 hue, hue, d;
+                add.u32 hue, hue, 240;
             }
         }
     }
-    setp.lt.u32 ok, hue, 0;
+    setp.lt.s32 ok, hue, 0;
     @ok add.u32 hue, hue, 360;
     div.u32 hue180, hue, 2;
     // s
@@ -514,18 +526,18 @@ RET:
     @ok mov.u32 s, 0;
     mov.u32 hsv_v, mx;
     // 逐段判据
-    mov.u32 base, 0;
+    mov.u64 base, 0;
 SEGLOOP:
-    setp.ge.u32 ok, base, 48;
+    setp.ge.u64 ok, base, 192;
     @ok bra DONE;
     // enable_rgb
-    ld.global.u32 en, [sb + base*4 + 0];
+    ld.global.u32 en, [sb + base + 0];
     setp.eq.u32 ok, en, 0;
     @!ok {
-        ld.global.u32 rr, [sb + base*4 + 4];
-        ld.global.u32 gg, [sb + base*4 + 8];
-        ld.global.u32 bb, [sb + base*4 + 12];
-        ld.global.u32 d2, [sb + base*4 + 16];
+        ld.global.u32 rr, [sb + base + 4];
+        ld.global.u32 gg, [sb + base + 8];
+        ld.global.u32 bb, [sb + base + 12];
+        ld.global.u32 d2, [sb + base + 16];
         sub.u32 dr, r, rr;
         sub.u32 dg, g, gg;
         sub.u32 db, b, bb;
@@ -538,11 +550,11 @@ SEGLOOP:
         @!ok bra SEGNEXT;
     }
     // enable_hue
-    ld.global.u32 e, [sb + base*4 + 20];
+    ld.global.u32 e, [sb + base + 20];
     setp.eq.u32 ok, e, 0;
     @!ok {
-        ld.global.u32 v, [sb + base*4 + 24];
-        ld.global.u32 d, [sb + base*4 + 28];
+        ld.global.u32 v, [sb + base + 24];
+        ld.global.u32 d, [sb + base + 28];
         abs.diff.u32 dr, hue180, v;
         mov.u32 dg, 180;
         sub.u32 dg, dg, dr;
@@ -551,41 +563,41 @@ SEGLOOP:
         @!ok bra SEGNEXT;
     }
     // enable_lum_min
-    ld.global.u32 e, [sb + base*4 + 32];
+    ld.global.u32 e, [sb + base + 32];
     setp.eq.u32 ok, e, 0;
     @!ok {
-        ld.global.u32 v, [sb + base*4 + 36];
+        ld.global.u32 v, [sb + base + 36];
         setp.ge.u32 ok, hsv_v, v;
         @!ok bra SEGNEXT;
     }
     // enable_lum_max
-    ld.global.u32 e, [sb + base*4 + 40];
+    ld.global.u32 e, [sb + base + 40];
     setp.eq.u32 ok, e, 0;
     @!ok {
-        ld.global.u32 v, [sb + base*4 + 44];
+        ld.global.u32 v, [sb + base + 44];
         setp.le.u32 ok, hsv_v, v;
         @!ok bra SEGNEXT;
     }
     // enable_sat_min
-    ld.global.u32 e, [sb + base*4 + 48];
+    ld.global.u32 e, [sb + base + 48];
     setp.eq.u32 ok, e, 0;
     @!ok {
-        ld.global.u32 v, [sb + base*4 + 52];
+        ld.global.u32 v, [sb + base + 52];
         setp.ge.u32 ok, s, v;
         @!ok bra SEGNEXT;
     }
     // enable_sat_max
-    ld.global.u32 e, [sb + base*4 + 56];
+    ld.global.u32 e, [sb + base + 56];
     setp.eq.u32 ok, e, 0;
     @!ok {
-        ld.global.u32 v, [sb + base*4 + 60];
+        ld.global.u32 v, [sb + base + 60];
         setp.le.u32 ok, s, v;
         @!ok bra SEGNEXT;
     }
     st.global.u8 [o + tid], 1;
     bra RET;
 SEGNEXT:
-    add.u32 base, base, 64;
+    add.u64 base, base, 64;
     bra SEGLOOP;
 DONE:
     st.global.u8 [o + tid], 0;
@@ -597,8 +609,9 @@ RET:
 .visible .entry dilate_kernel(
     .param .u64 in, .param .u64 out, .param .u32 w, .param .u32 h, .param .u32 n)
 {
-    .reg .u32 tid, x, y, x0, x1, y0, y1, i, j, idx, v;
+    .reg .u32 tid, x, y, x0, x1, y0, y1, i, j, idx, v, v2u;
     .reg .u64 p, o;
+    .reg .u8 v2, v8;
     .reg .pred hit;
     cvta.to.global.u64 p, [in];
     cvta.to.global.u64 o, [out];
@@ -611,14 +624,14 @@ RET:
     rem.u32 x, tid, w;
     mov.u32 x0, x;
     sub.u32 x0, x0, 1;
-    setp.lt.u32 hit, x0, 0;
+    setp.lt.s32 hit, x0, 0;
     @hit mov.u32 x0, 0;
     add.u32 x1, x, 1;
     setp.ge.u32 hit, x1, w;
     @hit sub.u32 x1, x1, 1;
     mov.u32 y0, y;
     sub.u32 y0, y0, 1;
-    setp.lt.u32 hit, y0, 0;
+    setp.lt.s32 hit, y0, 0;
     @hit mov.u32 y0, 0;
     add.u32 y1, y, 1;
     setp.ge.u32 hit, y1, h;
@@ -634,7 +647,8 @@ DL:
     @hit bra DL2END;
     mad.lo.u32 idx, i, w, j;
     ld.global.u8 v2, [p + idx];
-    setp.ne.u32 hit, v2, 0;
+    cvt.u32.u8 v2u, v2;
+    setp.ne.u32 hit, v2u, 0;
     @hit mov.u32 v, 255;
     add.u32 j, j, 1;
     bra DL2;
@@ -642,7 +656,8 @@ DL2END:
     add.u32 i, i, 1;
     bra DL;
 DLEND:
-    st.global.u8 [o + tid], v;
+    cvt.u8.u32 v8, v;
+    st.global.u8 [o + tid], v8;
 RET:
     ret;
 }
@@ -652,8 +667,8 @@ RET:
     .param .u64 src, .param .u64 dst, .param .u32 sw, .param .u32 sh,
     .param .u32 dw, .param .u32 dh)
 {
-    .reg .u32 tid, x, y, sx, sy, si, di;
-    .reg .u64 p, o;
+    .reg .u32 tid, x, y, sx, sy, si32, di32, n;
+    .reg .u64 p, o, si, di;
     .reg .u8 c0, c1, c2;
     .reg .pred hit;
     cvta.to.global.u64 p, [src];
@@ -671,9 +686,10 @@ RET:
     div.u32 sy, sy, dh;
     mul.lo.u32 sx, x, sw;
     div.u32 sx, sx, dw;
-    mad.lo.u32 si, sy, sw, sx;
-    mad.lo.u32 di, tid, 3, 0;
-    mul.wide.u32 si, si, 3;
+    mad.lo.u32 si32, sy, sw, sx;
+    mad.lo.u32 di32, tid, 3, 0;
+    mul.wide.u32 si, si32, 3;
+    cvt.u64.u32 di, di32;
     ld.global.u8 c0, [p + si];
     ld.global.u8 c1, [p + si + 1];
     ld.global.u8 c2, [p + si + 2];

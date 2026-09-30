@@ -451,8 +451,8 @@ pub fn write_ocr_png(events: &[SubtitleEvent], cfg: &AppConfig, out_dir: &Path) 
         let img = apply_canvas_postprocess(img, ocr);
         // Divid each subtitle into 2 lines：若存在整行空白带（两行字幕），拆成上下两张
         if ocr.divid_into_2_lines && max_h >= 12 {
-            if let Some(split_y) = find_blank_split(&img) {
-                let (top, bottom) = split_vertical(&img, split_y);
+            if let Some(split_y) = find_blank_split(&img, bg, 12) {
+                let (top, bottom) = split_vertical(&img, split_y, bg);
                 let pt = out_dir.join(format!("subtitle_{:04}_top.{ext}", img_idx));
                 let pb = out_dir.join(format!("subtitle_{:04}_bottom.{ext}", img_idx));
                 save_image(&top, &pt, &ext, ocr.quality)?;
@@ -659,13 +659,14 @@ pub fn render_subtitle_tile(ev: &SubtitleEvent, ocr: &OcrConfig) -> Option<image
         cov
     };
     let gamma = ocr.coverage_gamma.clamp(0.1, 4.0);
+    let bin_th = ocr.binary_threshold.clamp(0.02, 0.98);
     let mut out = image::RgbaImage::new(dw as u32, dh as u32);
     for y in 0..dh {
         for x in 0..dw {
             let c = cov[y * dw + x];
-            // binary 为旧二值行为（硬边，后处理项对其无效）；其余模式按覆盖率连续混合
+            // binary 为二值硬边（阈值可调）；其余模式按覆盖率连续混合
             let alpha = if mode == "binary" {
-                if c >= 0.5 { 1.0 } else { 0.0 }
+                if c >= bin_th { 1.0 } else { 0.0 }
             } else if (gamma - 1.0).abs() < 1e-6 {
                 c
             } else {
@@ -854,15 +855,19 @@ fn save_image(img: &image::RgbaImage, path: &Path, fmt: &str, quality: i64) -> R
     Ok(())
 }
 
-/// 找整行全白（空白）横带；返回中心 y（用于拆两行）。找不到返回 None。
-fn find_blank_split(img: &image::RgbaImage) -> Option<u32> {
+/// 找整行纯背景（空白）横带；返回中心 y（用于拆两行）。找不到返回 None。
+/// 空白判定相对 `bg` 色做容差比较（支持深色背景，不再假定白底）。
+fn find_blank_split(img: &image::RgbaImage, bg: [u8; 3], tol: u8) -> Option<u32> {
     let (w, h) = (img.width(), img.height());
+    let tol = tol as i32;
     let mut blank_rows: Vec<u32> = Vec::new();
     for y in 0..h {
         let mut blank = true;
         for x in 0..w {
             let p = img.get_pixel(x, y);
-            if p[0] < 240 || p[1] < 240 || p[2] < 240 {
+            if (p[0] as i32 - bg[0] as i32).abs() > tol
+                || (p[1] as i32 - bg[1] as i32).abs() > tol
+                || (p[2] as i32 - bg[2] as i32).abs() > tol {
                 blank = false;
                 break;
             }
@@ -898,15 +903,15 @@ fn find_blank_split(img: &image::RgbaImage) -> Option<u32> {
     }
 }
 
-fn split_vertical(img: &image::RgbaImage, y: u32) -> (image::RgbaImage, image::RgbaImage) {
+fn split_vertical(img: &image::RgbaImage, y: u32, bg: [u8; 3]) -> (image::RgbaImage, image::RgbaImage) {
     let (w, h) = (img.width(), img.height());
     let mut top = image::RgbaImage::new(w, y.max(1));
     let mut bottom = image::RgbaImage::new(w, h.saturating_sub(y).max(1));
     for p in top.pixels_mut() {
-        *p = image::Rgba([255, 255, 255, 255]);
+        *p = image::Rgba([bg[0], bg[1], bg[2], 255]);
     }
     for p in bottom.pixels_mut() {
-        *p = image::Rgba([255, 255, 255, 255]);
+        *p = image::Rgba([bg[0], bg[1], bg[2], 255]);
     }
     for yy in 0..y.max(1) {
         for x in 0..w {
