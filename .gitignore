@@ -25,3 +25,8 @@ Thumbs.db
 # 测试输出目录（保留文本验证产物，忽略二进制）
 tests/*/subtitle_imgs/
 *.sub
+
+# 上传素材 / 逆向参考包 / 本地抓取产物（不进仓库）
+.uploads/
+esrXP_src/
+rip_out/

@@ -3,6 +3,96 @@
 
 use crate::config::PostprocessConfig;
 
+/// 连通域级除噪：移除面积 ≤ `min_area` 的孤立小分量（椒盐噪声点/小簇）。
+/// 用于 OCR / VobSub / 位图缩略图渲染前的二次清理——`clean` 只去掉单点与单线，
+/// 面积 2-5px 的小噪点簇会残留，渲染成椒盐噪声。此函数补上这一档。
+/// 返回 0/255 mask（非破坏：保留输入也可安全调用）。
+pub fn despeckle(mask: &[u8], w: usize, h: usize, min_area: usize) -> Vec<u8> {
+    let n = w * h;
+    if n == 0 || min_area == 0 {
+        return mask.to_vec();
+    }
+    let mut out = mask.to_vec();
+    let mut labels = vec![0i32; n];
+    let mut parent: Vec<i32> = vec![-1; 1];
+    let mut next_label: i32 = 1;
+    for y in 0..h {
+        let row = y * w;
+        let row_prev = if y > 0 { (y - 1) * w } else { 0 };
+        for x in 0..w {
+            let i = row + x;
+            if mask[i] == 0 {
+                continue;
+            }
+            let left = if x > 0 && mask[i - 1] > 0 { Some(labels[i - 1]) } else { None };
+            let up = if y > 0 && mask[row_prev + x] > 0 {
+                Some(labels[row_prev + x])
+            } else {
+                None
+            };
+            let up_left = if y > 0 && x > 0 && mask[row_prev + x - 1] > 0 {
+                Some(labels[row_prev + x - 1])
+            } else {
+                None
+            };
+            let up_right = if y > 0 && x + 1 < w && mask[row_prev + x + 1] > 0 {
+                Some(labels[row_prev + x + 1])
+            } else {
+                None
+            };
+            let mut cands: Vec<i32> = [left, up, up_left, up_right].into_iter().flatten().collect();
+            if cands.is_empty() {
+                parent.push(-1);
+                labels[i] = next_label;
+                next_label += 1;
+            } else {
+                cands.sort();
+                cands.dedup();
+                let mut root = find(&mut parent, cands[0]);
+                for c in cands.iter().skip(1) {
+                    let r2 = find(&mut parent, *c);
+                    if r2 != root {
+                        union(&mut parent, root, r2);
+                        root = find(&mut parent, root);
+                    }
+                }
+                labels[i] = root;
+            }
+        }
+    }
+    if next_label == 1 {
+        return out;
+    }
+    let mut map: Vec<i32> = vec![0; parent.len()];
+    let mut comps = 0;
+    for i in 1..next_label {
+        let r = find(&mut parent, i);
+        if map[r as usize] == 0 {
+            comps += 1;
+            map[r as usize] = comps;
+        }
+    }
+    let mut area = vec![0i64; (comps + 1) as usize];
+    for (i, l) in labels.iter_mut().enumerate() {
+        if *l == 0 {
+            continue;
+        }
+        let r = find(&mut parent, *l) as usize;
+        *l = map[r];
+        area[*l as usize] += 1;
+    }
+    for c in 1..=(comps as usize) {
+        if area[c] <= min_area as i64 {
+            for (i, l) in labels.iter().enumerate() {
+                if *l as usize == c {
+                    out[i] = 0;
+                }
+            }
+        }
+    }
+    out
+}
+
 /// 对二值 mask（0/255）执行连通域清理，返回 0/255 mask。
 pub fn clean(mask: &[u8], w: usize, h: usize, cfg: &PostprocessConfig) -> Vec<u8> {
     let n = w * h;
@@ -157,4 +247,49 @@ fn union(parent: &mut Vec<i32>, a: i32, b: i32) {
     }
     parent[a as usize] += parent[b as usize];
     parent[b as usize] = a;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mask_from_str(rows: &[&str]) -> Vec<u8> {
+        let h = rows.len();
+        let w = rows[0].len();
+        let mut m = vec![0u8; w * h];
+        for (y, r) in rows.iter().enumerate() {
+            for (x, ch) in r.chars().enumerate() {
+                m[y * w + x] = if ch == '#' { 255 } else { 0 };
+            }
+        }
+        m
+    }
+
+    #[test]
+    fn despeckle_keeps_large_component_removes_small() {
+        // 大字块（面积 6）+ 两个小噪点簇（面积 2、3）
+        let m = mask_from_str(&[
+            "..##..",
+            "..##..",
+            "..#...",
+            "..#...",
+            "......",
+            "..#...",
+            ".....#",
+        ]);
+        // 面积：竖线 6、第5行单点 1、右下角单点 1 → despeckle(4) 应全部保留竖线
+        let out = despeckle(&m, 6, 7, 4);
+        let nz = out.iter().filter(|v| **v > 0).count();
+        assert_eq!(nz, 6, "只有面积>4 的主组件应保留");
+        // 放大阈值 → 竖线(6)也被清掉，与语义一致（min_area 为「面积≤则移除」）
+        let out2 = despeckle(&m, 6, 7, 6);
+        assert_eq!(out2.iter().filter(|v| **v > 0).count(), 0);
+    }
+
+    #[test]
+    fn despeckle_zero_returns_copy() {
+        let m = vec![255u8; 12];
+        let out = despeckle(&m, 4, 3, 0);
+        assert_eq!(out, m);
+    }
 }

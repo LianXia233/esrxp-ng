@@ -155,6 +155,7 @@ pub struct OcrConfig {
     pub stroke_dilate: i64,       // 笔画加粗：覆盖率膨胀半径（输出像素 0-4，0=不加粗）
     pub coverage_gamma: f64,      // 覆盖率先验：<1 笔画更实更黑，>1 收细变淡（0.3-2.0）
     pub binary_threshold: f64,    // 二值阈值：binary 模式下覆盖率 ≥ 该值判为笔画（0.05-0.95，越大笔画越细）
+    pub despeckle_min_area: i64,  // 渲染前除噪：移除面积 ≤ 该值的孤立噪点簇（0=不除噪；默认 4 去掉椒盐噪声）
     pub text_color: String,       // 前景（文字）色 #RRGGBB
     pub bg_color: String,         // 背景色 #RRGGBB
     // —— 输出格式与质量 ——
@@ -181,6 +182,7 @@ impl Default for OcrConfig {
         Self { per_image: 1, scale: 1.0, divid_into_2_lines: false,
                color_mode: "gray".into(), antialias: true, supersample: 3,
                stroke_dilate: 0, coverage_gamma: 0.85, binary_threshold: 0.5,
+               despeckle_min_area: 4,
                text_color: "#000000".into(), bg_color: "#FFFFFF".into(),
                format: "png".into(), quality: 95,
                scale_filter: "lanczos3".into(), max_width: 0,

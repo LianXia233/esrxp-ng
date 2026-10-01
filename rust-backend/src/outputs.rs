@@ -346,9 +346,11 @@ pub fn write_vobsub(events: &[SubtitleEvent], video_w: usize, video_h: usize,
 
 fn encode_vobsub_frame(ev: &SubtitleEvent, main: (u8, u8, u8), outline: (u8, u8, u8)) -> Vec<u8> {
     let (w, h) = (ev.image_w, ev.image_h);
+    // 渲染前缀去噪点簇，避免 VobSub 字幕图椒盐噪声（与 OCR/位图一致）
+    let mask = crate::postprocess::despeckle(&ev.mask, w, h, 4);
     let mut nib: Vec<u8> = vec![15; w * h]; // 默认透明
     for (i, px) in ev.image.chunks_exact(3).enumerate() {
-        if ev.mask[i] == 0 {
+        if mask[i] == 0 {
             continue;
         }
         let (r, g, b) = (px[0] as i32, px[1] as i32, px[2] as i32);
@@ -589,6 +591,14 @@ pub fn render_subtitle_tile(ev: &SubtitleEvent, ocr: &OcrConfig) -> Option<image
     if sw == 0 || sh == 0 {
         return None;
     }
+    // 渲染前先除噪：移除面积 ≤ despeckle_min_area 的孤立噪点簇，
+    // 消除 OCR / 位图缩略图上的椒盐噪声（clean 只处理单点/单线）。
+    let packed = ocr.despeckle_min_area.max(0) as usize;
+    let src_mask: std::borrow::Cow<[u8]> = if packed > 0 {
+        std::borrow::Cow::Owned(crate::postprocess::despeckle(&ev.mask, sw, sh, packed))
+    } else {
+        std::borrow::Cow::Borrowed(&ev.mask)
+    };
     let scale = ocr.scale.max(0.1);
     let dw = ((sw as f64) * scale).round().max(1.0) as usize;
     let dh = ((sh as f64) * scale).round().max(1.0) as usize;
@@ -611,7 +621,7 @@ pub fn render_subtitle_tile(ev: &SubtitleEvent, ocr: &OcrConfig) -> Option<image
                 for sx in 0..ss {
                     let px_f = (x as f64 + (sx as f64 + 0.5) * step) / scale - 0.5;
                     let py_f = (y as f64 + (sy as f64 + 0.5) * step) / scale - 0.5;
-                    c += sample_mask(&ev.mask, sw, sh, px_f, py_f);
+                    c += sample_mask(&src_mask[..], sw, sh, px_f, py_f);
                     if use_pixels {
                         let (r, g, b) = sample_rgb(&ev.image, sw, sh, px_f, py_f);
                         acc[0] += r;

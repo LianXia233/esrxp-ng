@@ -1028,13 +1028,15 @@ const app = createApp({
       } catch (e) { this.$message.error(e.message); }
     },
     setZoom(d) { this.mgrZoom = Math.min(4, Math.max(0.5, Math.round((this.mgrZoom + d) * 10) / 10)); },
-    imgW(e) { return Math.max(8, Math.round((e.image_w || 60) * this.mgrZoom)); },
+    imgW(e) { return Math.max(8, Math.round((e.render_w || e.image_w || 60) * this.mgrZoom)); },
     eventImgUrl(e) {
-      // 后端给的是 RGB24 裸像素 base64，转 canvas dataURL；结果缓存在事件对象上
+      // 优先显示渲染后的白底黑字位图（render_b64，与 OCR 导出同管线、已除噪）；
+      // 兼容旧工程/旧后端回退到原始 RGB24 裁切。结果缓存在事件对象上。
       if (e._imgUrl !== undefined) return e._imgUrl;
+      const b64 = e.render_b64 || e.image_b64;
+      const w = e.render_w || e.image_w, h = e.render_h || e.image_h;
       try {
-        const bin = Uint8Array.from(atob(e.image_b64), c => c.charCodeAt(0));
-        const w = e.image_w, h = e.image_h;
+        const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
         if (!w || !h || bin.length < w * h * 3) { e._imgUrl = ''; return ''; }
         const cv = document.createElement('canvas');
         cv.width = w; cv.height = h;

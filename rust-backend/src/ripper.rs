@@ -120,6 +120,19 @@ fn union_masks2(a: &[u8], b: &[u8]) -> Vec<u8> {
     u
 }
 
+/// 实际生效的 ROI 总缩放：region.scale × preview.scale_video。
+/// prepare_roi / api_preview / 输出坐标回映共用同一公式，保证预览与抓取一致。
+///
+/// 关键：必须与 `prepare_roi` 的**实际缩放分支**完全一致——那里仅当
+/// `scale > 0` 才缩放（region.scale 默认 0 = 不缩放，等价 1.0）。若此处直接返回
+/// 原乘积，默认配置下为 0，会令 api_preview 写回整帧时 `x/scale`、`y/scale` 除 0，
+/// 全部命中塌缩到末行/末列，导致预览叠加错位、选区与字幕对不上。
+/// 因此统一为：`>0 返回实际缩放，否则按不缩放(1.0)处理`。
+pub fn roi_scale(cfg: &AppConfig) -> f64 {
+    let s = cfg.region.scale * cfg.preview.scale_video.max(0.05);
+    if s > 1e-6 { s } else { 1.0 }
+}
+
 /// 裁切 ROI + 缩放 + 锐化（缩放走 FrameKernels：CUDA→CPU）。
 /// 对齐 esrXP Scale Video / Sharpen Video：preview.scale_video 乘入 ROI 缩放，
 /// preview.sharpen_video 并入锐化。
@@ -558,4 +571,28 @@ pub fn crop_event(video: &mut VideoSource, cfg: &AppConfig, ev: &SubtitleEvent) 
     made.start = ev.start;
     made.start_frame = ev.start_frame;
     Ok(made)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AppConfig;
+
+    /// roi_scale 必须与 prepare_roi 的实际缩放分支一致：
+    /// 默认配置（region.scale=0、scale_video=1）应返回 1.0，
+    /// 否则 api_preview 整帧写回会除以 0 导致叠加错位（本修复的目标）。
+    #[test]
+    fn roi_scale_default_is_one_not_zero() {
+        let cfg = AppConfig::default();
+        assert_eq!(roi_scale(&cfg), 1.0, "默认不缩放必须等效 1.0（原实现返回 0）");
+    }
+
+    #[test]
+    fn roi_scale_reflects_zoom() {
+        let mut cfg = AppConfig::default();
+        cfg.region.scale = 2.0;
+        assert_eq!(roi_scale(&cfg), 2.0);
+        cfg.region.scale = 0.5;
+        assert_eq!(roi_scale(&cfg), 0.5);
+    }
 }

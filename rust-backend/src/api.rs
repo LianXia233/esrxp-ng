@@ -279,21 +279,28 @@ async fn api_preview(State(st): State<AppState>, Json(req): Json<PreviewReq>) ->
                 "width": tw, "height": th,
                 "roi_w": rw, "roi_h": rh,
                 "roi_origin": [origin.0, origin.1],
-                "roi_scale": cfg.region.scale * cfg.preview.scale_video.max(0.05),
+                "roi_scale": crate::ripper::roi_scale(&cfg),
                 "region_only": true,
                 "frame_width": fd.width, "frame_height": fd.height,
             }));
         }
         let use_roi = req.region_only.unwrap_or(false);
         // 借用复用整帧 / ROI 像素（不再复制整帧 RGB，降低抓取期内存峰值）
+        let scale = crate::ripper::roi_scale(&cfg);
         let (base, m, mw, mh): (&[u8], Vec<u8>, usize, usize) = if use_roi {
             (&roi[..], mask.clone(), rw, rh)
         } else {
             let mut full_mask = vec![0u8; fd.width * fd.height];
+            // ROI 可能已按 region.scale × preview.scale_video 放大，mask 是缩放后的
+            // 尺寸；写回整帧时必须把缩放坐标还原回原始帧坐标，避免越界/错位。
+            let (fw, fh) = (fd.width as i64, fd.height as i64);
             for y in 0..rh {
+                let fy = (origin.1 + (y as f64 / scale).round() as i64).max(0).min(fh - 1);
+                let row = fy as usize * fd.width;
                 for x in 0..rw {
                     if mask[y * rw + x] > 0 {
-                        full_mask[(origin.1 as usize + y) * fd.width + origin.0 as usize + x] = 255;
+                        let fx = (origin.0 + (x as f64 / scale).round() as i64).max(0).min(fw - 1);
+                        full_mask[row + fx as usize] = 255;
                     }
                 }
             }
@@ -340,7 +347,7 @@ async fn api_preview(State(st): State<AppState>, Json(req): Json<PreviewReq>) ->
             "width": pw, "height": ph,
             "roi_w": rw, "roi_h": rh,
             "roi_origin": [origin.0, origin.1],
-            "roi_scale": cfg.region.scale * cfg.preview.scale_video.max(0.05),
+            "roi_scale": crate::ripper::roi_scale(&cfg),
             "region_only": use_roi,
             "frame_width": fd.width, "frame_height": fd.height,
         }))
@@ -933,15 +940,36 @@ fn persist_project(events: &[SubtitleEvent], filtered: &[SubtitleEvent], video: 
     Ok((artifacts, events.to_vec()))
 }
 
-fn events_meta(events: &[SubtitleEvent]) -> Vec<Value> {
-    events.iter().enumerate().map(|(i, e)| json!({
-        "index": i + 1, "start": (e.start * 100.0).round() / 100.0,
-        "end": (e.end * 100.0).round() / 100.0,
-        "start_frame": e.start_frame, "end_frame": e.end_frame,
-        "bbox": e.bbox, "diff_frames": e.diff_frames, "deleted": e.deleted,
-        "image_w": e.image_w, "image_h": e.image_h,
-        "image_b64": base64_encode(&e.image),  // bbox 裁切 RGB24（管理器位图预览用）
-    })).collect()
+/// 把事件渲染为白底黑字位图（与 OCR 导出同一 render_subtitle_tile 管线，含 despeckle 除噪）。
+/// 返回 (RGB24, w, h)。字幕管理器「位图」列用它替代原始视频像素——原始裁切图是
+/// 复杂背景+字幕混合（缩略图看不清字幕、噪声明显），渲染图保证清晰可读。
+fn render_event_tile(e: &SubtitleEvent, cfg: &AppConfig) -> Option<(Vec<u8>, usize, usize)> {
+    let tile = crate::outputs::render_subtitle_tile(e, &cfg.output.ocr)?;
+    let (w, h) = (tile.width() as usize, tile.height() as usize);
+    let mut rgb = Vec::with_capacity(w * h * 3);
+    for p in tile.pixels() {
+        rgb.extend_from_slice(&[p[0], p[1], p[2]]);
+    }
+    Some((rgb, w, h))
+}
+
+fn events_meta(events: &[SubtitleEvent], cfg: &AppConfig) -> Vec<Value> {
+    events.iter().enumerate().map(|(i, e)| {
+        let (render_b64, render_w, render_h) = match render_event_tile(e, cfg) {
+            Some((rgb, w, h)) => (base64_encode(&rgb), w as i64, h as i64),
+            None => (String::new(), 0, 0),
+        };
+        json!({
+            "index": i + 1, "start": (e.start * 100.0).round() / 100.0,
+            "end": (e.end * 100.0).round() / 100.0,
+            "start_frame": e.start_frame, "end_frame": e.end_frame,
+            "bbox": e.bbox, "diff_frames": e.diff_frames, "deleted": e.deleted,
+            "image_w": e.image_w, "image_h": e.image_h,
+            "image_b64": base64_encode(&e.image),  // bbox 裁切 RGB24（回退预览用）
+            "render_b64": render_b64,              // 渲染后白底黑字位图（管理器首选显示）
+            "render_w": render_w, "render_h": render_h,
+        })
+    }).collect()
 }
 
 #[derive(Deserialize)]
@@ -970,18 +998,18 @@ async fn api_manager_merge_repeat(Json(req): Json<MergeRepeatReq>) -> Response {
         Err(e) => return err_response(&e),
     };
     let _ = proj;
-    Json(json!({"count": merged.len(), "merged": removed, "artifacts": artifacts, "subtitles": events_meta(&merged)})).into_response()
+    Json(json!({"count": merged.len(), "merged": removed, "artifacts": artifacts, "subtitles": events_meta(&merged, &cfg)})).into_response()
 }
 
 async fn api_manager_list(Json(req): Json<ManagerOp>) -> Response {
     let r = load_project_for_manage(&req.project);
-    let (events, filtered, _video, _cfg, _out) = match r {
+    let (events, filtered, _video, cfg, _out) = match r {
         Ok(x) => x,
         Err(e) => return e,
     };
     Json(json!({
-        "subtitles": events_meta(&events),
-        "filtered": events_meta(&filtered),
+        "subtitles": events_meta(&events, &cfg),
+        "filtered": events_meta(&filtered, &cfg),
         "count": events.len(), "filtered_count": filtered.len(),
     })).into_response()
 }
@@ -1004,7 +1032,7 @@ async fn api_manager_recover(Json(req): Json<ManagerOp>) -> Response {
         Err(e) => return err_response(&e),
     };
     let _ = proj;
-    Json(json!({"count": events.len(), "artifacts": artifacts, "subtitles": events_meta(&events)})).into_response()
+    Json(json!({"count": events.len(), "artifacts": artifacts, "subtitles": events_meta(&events, &cfg)})).into_response()
 }
 
 async fn api_manager_remove(Json(req): Json<ManagerOp>) -> Response {
@@ -1024,7 +1052,7 @@ async fn api_manager_remove(Json(req): Json<ManagerOp>) -> Response {
         Err(e) => return err_response(&e),
     };
     let _ = proj;
-    Json(json!({"count": events.len(), "artifacts": artifacts, "subtitles": events_meta(&events)})).into_response()
+    Json(json!({"count": events.len(), "artifacts": artifacts, "subtitles": events_meta(&events, &cfg)})).into_response()
 }
 
 async fn api_manager_purge(Json(req): Json<ManagerOp>) -> Response {
@@ -1039,7 +1067,7 @@ async fn api_manager_purge(Json(req): Json<ManagerOp>) -> Response {
         Err(e) => return err_response(&e),
     };
     let _ = proj;
-    Json(json!({"count": kept.len(), "artifacts": artifacts, "subtitles": events_meta(&kept)})).into_response()
+    Json(json!({"count": kept.len(), "artifacts": artifacts, "subtitles": events_meta(&kept, &cfg)})).into_response()
 }
 
 async fn api_manager_crop(Json(req): Json<ManagerOp>) -> Response {
@@ -1052,7 +1080,7 @@ async fn api_manager_crop(Json(req): Json<ManagerOp>) -> Response {
     if idxs.is_empty() {
         return err_response("请指定要裁剪的字幕序号");
     }
-    let res = tokio::task::spawn_blocking(move || -> Result<Vec<SubtitleEvent>, String> {
+    let res = tokio::task::spawn_blocking(move || -> Result<(Vec<SubtitleEvent>, Vec<Value>), String> {
         let mut vs = VideoSource::open(&video).map_err(|e| e.to_string())?;
         let mut updated = Vec::new();
         for i in &idxs {
@@ -1067,10 +1095,12 @@ async fn api_manager_crop(Json(req): Json<ManagerOp>) -> Response {
         let (artifacts, proj) = write_all_outputs(&events, &filtered, &video, &cfg, Path::new(&out_dir))
             .map_err(|e| e.to_string())?;
         let _ = proj;
-        Ok(events)
+        let _ = artifacts;
+        let meta = events_meta(&events, &cfg);
+        Ok((events, meta))
     }).await;
     match res {
-        Ok(Ok(events)) => Json(json!({"count": events.len(), "subtitles": events_meta(&events)})).into_response(),
+        Ok(Ok((events, meta))) => Json(json!({"count": events.len(), "subtitles": meta})).into_response(),
         Ok(Err(e)) => err_response(&e),
         Err(e) => err_response(&e.to_string()),
     }
@@ -1109,7 +1139,7 @@ async fn api_manager_edit(Json(req): Json<ManagerOp>) -> Response {
         }
     }
     match persist_project(&events, &filtered, &video, &cfg, &out_dir) {
-        Ok((artifacts, _)) => Json(json!({"count": events.len(), "artifacts": artifacts, "subtitles": events_meta(&events)})).into_response(),
+        Ok((artifacts, _)) => Json(json!({"count": events.len(), "artifacts": artifacts, "subtitles": events_meta(&events, &cfg)})).into_response(),
         Err(e) => err_response(&e),
     }
 }
@@ -1146,7 +1176,7 @@ async fn api_manager_shift(Json(req): Json<ManagerOp>) -> Response {
         }
     }
     match persist_project(&events, &filtered, &video, &cfg, &out_dir) {
-        Ok((artifacts, _)) => Json(json!({"count": events.len(), "offset_ms": req.offset_ms.unwrap_or(0), "artifacts": artifacts, "subtitles": events_meta(&events)})).into_response(),
+        Ok((artifacts, _)) => Json(json!({"count": events.len(), "offset_ms": req.offset_ms.unwrap_or(0), "artifacts": artifacts, "subtitles": events_meta(&events, &cfg)})).into_response(),
         Err(e) => err_response(&e),
     }
 }
@@ -1166,7 +1196,7 @@ async fn api_manager_split(Json(req): Json<ManagerOp>) -> Response {
     if t <= 0.0 {
         return err_response("split 需指定 time（秒）");
     }
-    let res = tokio::task::spawn_blocking(move || -> Result<Vec<SubtitleEvent>, String> {
+    let res = tokio::task::spawn_blocking(move || -> Result<(Vec<SubtitleEvent>, Vec<Value>), String> {
         let ev = events.get(idx).cloned().ok_or("index 越界")?;
         if t <= ev.start || t >= ev.end {
             return Err(format!("分割时间 {t:.2}s 需在字幕区间内（{:.2}–{:.2}s）", ev.start, ev.end));
@@ -1189,10 +1219,11 @@ async fn api_manager_split(Json(req): Json<ManagerOp>) -> Response {
         let (artifacts, _) = write_all_outputs(&events, &filtered, &video, &cfg, Path::new(&out_dir))
             .map_err(|e| e.to_string())?;
         let _ = artifacts;
-        Ok(events)
+        let meta = events_meta(&events, &cfg);
+        Ok((events, meta))
     }).await;
     match res {
-        Ok(Ok(events)) => Json(json!({"count": events.len(), "subtitles": events_meta(&events)})).into_response(),
+        Ok(Ok((events, meta))) => Json(json!({"count": events.len(), "subtitles": meta})).into_response(),
         Ok(Err(e)) => err_response(&e),
         Err(e) => err_response(&e.to_string()),
     }
@@ -1209,7 +1240,7 @@ async fn api_manager_merge(Json(req): Json<ManagerOp>) -> Response {
     if idxs.len() != 2 {
         return err_response("merge 需指定两条 index");
     }
-    let res = tokio::task::spawn_blocking(move || -> Result<Vec<SubtitleEvent>, String> {
+    let res = tokio::task::spawn_blocking(move || -> Result<(Vec<SubtitleEvent>, Vec<Value>), String> {
         let (a, b) = match (events.get(idxs[0]).cloned(), events.get(idxs[1]).cloned()) {
             (Some(x), Some(y)) => (x, y),
             _ => return Err("index 越界".into()),
@@ -1232,10 +1263,11 @@ async fn api_manager_merge(Json(req): Json<ManagerOp>) -> Response {
         let (artifacts, _) = write_all_outputs(&events, &filtered, &video, &cfg, Path::new(&out_dir))
             .map_err(|e| e.to_string())?;
         let _ = artifacts;
-        Ok(events)
+        let meta = events_meta(&events, &cfg);
+        Ok((events, meta))
     }).await;
     match res {
-        Ok(Ok(events)) => Json(json!({"count": events.len(), "subtitles": events_meta(&events)})).into_response(),
+        Ok(Ok((events, meta))) => Json(json!({"count": events.len(), "subtitles": meta})).into_response(),
         Ok(Err(e)) => err_response(&e),
         Err(e) => err_response(&e.to_string()),
     }
@@ -1264,7 +1296,7 @@ async fn api_project_open(Json(req): Json<ProjectOpenReq>) -> Response {
     Json(json!({
         "video": video, "out_dir": out_dir,
         "config": serde_json::to_value(&cfg).unwrap_or(json!({})),
-        "subtitles": events_meta(&events), "filtered": events_meta(&filtered),
+        "subtitles": events_meta(&events, &cfg), "filtered": events_meta(&filtered, &cfg),
         "count": events.len(), "filtered_count": filtered.len(),
     })).into_response()
 }

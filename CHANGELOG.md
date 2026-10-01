@@ -2,6 +2,24 @@
 
 本项目语义化版本号（SemVer）。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.6.1] - 2026-10-01
+
+**字幕出图除噪与预览对齐修复** —— 按上传的 esrXP 逆向包逐项对照，修复三类出图质量差与预览选区错位（含 `subtitle_0031.png` 所示椒盐噪声样张）。
+
+### 修复
+- **OCR / VobSub / 位图缩略图椒盐噪声（根因修复）**：`clean` 只去掉单点与单线（面积 1px），面积 2–5px 的小噪点簇会残留并渲染成雪花噪声。新增连通域级除噪 `despeckle`（8 连通并查集标记 + 按面积阈值剔除），在 OCR 渲染（`render_subtitle_tile`，阈值可配 `output.ocr.despeckle_min_area`，默认 4）与 VobSub 编码（`encode_vobsub_frame`，固定 4）前统一清理，三处输出共用同一除噪逻辑
+- **字幕管理器位图缩略图看不清**：manager/list 与各管理器操作此前直接下发 bbox 裁切的原始视频像素（复杂背景 + 字幕混合，缩略图看不清字幕、噪声明显）；现改为下发**渲染后白底黑字位图**（与 OCR 导出同一 `render_subtitle_tile` 管线，含除噪），UI 位图列优先显示渲染图（`render_b64` / `render_w/h`），旧工程与旧后端自动回退原始裁切
+- **帧预览叠加错位 / 选区与字幕对不上（根因修复）**：预览整帧（`region_only=false`）时 ROI mask 写回整帧坐标除以缩放因子，而默认配置 `region.scale=0` 时该因子为 0 —— 除法塌缩使全部命中像素落到末行/末列，overlay 高亮画到错误位置、选区框与真实字幕对不上。新增共享 `roi_scale`（`region.scale × preview.scale_video`，≤1e-6 时按不缩放 1.0 处理），`prepare_roi` / `api_preview` / 输出坐标回映统一使用；同时补 `roi_scale` 与 `despeckle` 单元测试防回归
+
+### 验证
+- 样例工程渲染位图：白底黑字、背景像素恒为 `#FFFFFF`，除噪后无残留噪点簇
+- overlay 预览实测：字幕命中区保持原色（G≈96），背景区染绿（G≈182），字幕区域正确可见且与 bbox 对齐
+- `cargo test --lib` 6 项全部通过（新增 despeckle 两项、roi_scale 两项）
+
+### 其他
+- 版本 0.6.0 → 0.6.1（Cargo.toml / electron package.json / CHANGELOG 同步）
+
+
 ## [0.6.0] - 2026-09-30
 
 **GPU 内核审查与截图二值参数扩展** —— 逐行审查 CUDA PTX 内核与字幕截图渲染管线，修复取址缺陷，补充可调二值阈值，深色背景拆分支持。
