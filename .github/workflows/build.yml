@@ -10,12 +10,46 @@ permissions:
   contents: write
 
 jobs:
+  # ---------- 静态检查（最快拦截，独立于打包流程） ----------
+  # 测试必须显式 --lib：单元测试写在 src/*.rs 的 #[cfg(test)] 里，
+  # 裸 `cargo test` 只跑 bin target，会显示 running 0 tests 静默通过。
+  lint:
+    name: fmt / clippy / test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install FFmpeg dev + bindgen deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libavformat-dev libavcodec-dev libavutil-dev \
+            libswscale-dev libavfilter-dev libswresample-dev libavdevice-dev \
+            libclang-dev pkg-config
+
+      - name: cargo fmt --check
+        working-directory: rust-backend
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        working-directory: rust-backend
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test --lib
+        working-directory: rust-backend
+        run: cargo test --lib
+
   # ---------- Windows 客户端（Win11 目标） ----------
   # 工具链：mingw-w64 GNU（gcc 对 FFmpeg import lib 链接友好，避开 MSVC cl 的 -I 解析问题）
-  # FFmpeg：BtbN n4.4 分支预编译（API 与 ffmpeg-next 4.4 匹配）
+  # FFmpeg：BtbN n9.0 shared 预编译（Cargo.lock 锁定 ffmpeg-next 9.0.0）
   build-win:
     name: Windows x64
     runs-on: windows-latest
+    needs: lint
     steps:
       - uses: actions/checkout@v4
 
@@ -91,10 +125,12 @@ jobs:
           generate_release_notes: true
 
   # ---------- Debian 客户端 ----------
-  # ubuntu-22.04（ffmpeg 4.4，与 ffmpeg-next 4.4 头文件匹配）
+  # ubuntu-22.04 + vendored-ffmpeg：从源码编译 FFmpeg 9.0 并静态链接（用户零依赖），
+  # 与系统 ffmpeg 版本无关，故无需对齐 libav* 版本。
   build-debian:
     name: Debian / Ubuntu x64
     runs-on: ubuntu-22.04
+    needs: lint
     steps:
       - uses: actions/checkout@v4
 

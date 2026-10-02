@@ -2,6 +2,30 @@
 
 本项目语义化版本号（SemVer）。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [0.6.2] - 2026-10-02
+
+**全量代码审查修复** —— 逐模块审查（约 6500 行）后修复 1 个功能性 Bug、2 个安全性问题与一批健壮性/工程化问题。
+
+### 修复
+- **字幕管理器「移除」后产物不变（P0，功能 Bug）**：软删除（`deleted` 标记）的字幕此前照旧写入 ASS / SRT / VobSub / OCR 位图 / timeline —— 用户以为删掉了，实际产物一条没少（实测：标记数 1，产物仍 3 条）。根因是各写出函数遍历时根本不检查 `deleted`（该字段此前只用于 `.esr` 存取）。现统一在 `write_all_outputs` 入口过滤一次；`.esr` 仍写全量列表（含标记），故标记不丢、可恢复
+- **位图旧文件残留**：字幕数量减少后旧 `subtitle_*.png` 留在目录里被误认为本次产物。现写出后按本次编号清理超出范围的旧位图（仅匹配本函数生成的命名前缀与扩展名，不碰用户文件）
+- **开发态 CORS 全开（安全）**：`CorsLayer::permissive()` 配合后端接受任意绝对路径，任意网页的 JS 都能借用户权限驱动本机后端（读任意视频、在任意可写位置创建目录并写产物、跑批处理耗 CPU）。现收紧为仅回显本地 Origin。打包态（命名管道 / Unix socket）本不经 CORS，不受影响
+- **任务 ID 可预测（安全）**：`rand_id()` 仅用 `subsec_nanos()` 低位与 PID 异或，同进程并发建任务可能撞 `jobs` key，导致 `/api/jobs/{id}` 返回别人的结果。现改为全量纳秒 + PID（rotate）+ 原子序号混合
+- **`mask_plausible` 阈值截断**：`count < area * 30 / 100` 的整数除法在小 ROI 上退化为 0（如 area=4 时阈值 1），把本应合理的 mask 误判为不合理。改浮点比较
+- **字幕管理器每次操作重开视频**：`write_all_outputs` 为取宽高每次 `VideoSource::open()` 走一遍 FFmpeg 探测，而它被 9 个 manager 端点调用。改为按视频路径进程内缓存宽高，并删除残留死代码（`vinfo`）
+
+### 健壮性
+- **`make_event` 全空 mask 兜底**：全空 mask 会让 bbox 算出负宽高并产出尺寸错误的数据。当前所有调用路径均保证非空（不可触发），现补 1x1 空事件防御
+- **移除多余 `unsafe` 块**：`frame::Video::empty()` 在当前 ffmpeg-next 版本已是安全 fn
+
+### 工程化
+- **CI 新增静态检查 job**（独立于打包流程，`build-win` / `build-debian` 依赖它）：`cargo fmt --check` + `cargo clippy --all-targets -- -D warnings` + `cargo test --lib`。此前 CI 只 build + 打包，`cargo fmt --check` 实测有 diff 也无人拦
+- **测试必须显式 `--lib`**：单元测试写在 `src/*.rs` 的 `#[cfg(test)]` 里，裸 `cargo test` 只跑 bin target，显示 `running 0 tests` 静默通过 —— CI 因此固定用 `--lib`
+- **补齐单元测试 6 → 17 项**：产物软删除过滤、`.esr` 保留标记、mask 覆盖率门控边界（含 30% 临界）、任务 ID 碰撞、位图序号解析（含 `_top`/`_bottom` 变体与外部文件拒绝）
+- **清零编译与 clippy 警告**（原 18 个编译警告 + 22 个 clippy 警告）：删除未使用的 `gpu::backend_name`、并查集 `ptr_arg` 精准豁免（扫描期需 `push` 扩容）、组件号索引循环豁免并说明理由
+- **补 LICENSE 文件**：`package.json` 声明 MIT 但仓库无许可声明文本
+- **修正文档与实现不符**：`build.yml` 注释写「ffmpeg 4.4」实为 n9.0；Debian job 注释误称需对齐系统 ffmpeg 版本（实为 vendored 源码编译）；README「与 Python 参考实现逐项一致」因 `server.py` 已不在仓库而无法复现，已改为可验证的表述并说明差异
+
 ## [0.6.1] - 2026-10-01
 
 **字幕出图除噪与预览对齐修复** —— 按上传的 esrXP 逆向包逐项对照，修复三类出图质量差与预览选区错位（含 `subtitle_0031.png` 所示椒盐噪声样张）。

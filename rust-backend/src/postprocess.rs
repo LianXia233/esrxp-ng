@@ -24,7 +24,11 @@ pub fn despeckle(mask: &[u8], w: usize, h: usize, min_area: usize) -> Vec<u8> {
             if mask[i] == 0 {
                 continue;
             }
-            let left = if x > 0 && mask[i - 1] > 0 { Some(labels[i - 1]) } else { None };
+            let left = if x > 0 && mask[i - 1] > 0 {
+                Some(labels[i - 1])
+            } else {
+                None
+            };
             let up = if y > 0 && mask[row_prev + x] > 0 {
                 Some(labels[row_prev + x])
             } else {
@@ -40,7 +44,10 @@ pub fn despeckle(mask: &[u8], w: usize, h: usize, min_area: usize) -> Vec<u8> {
             } else {
                 None
             };
-            let mut cands: Vec<i32> = [left, up, up_left, up_right].into_iter().flatten().collect();
+            let mut cands: Vec<i32> = [left, up, up_left, up_right]
+                .into_iter()
+                .flatten()
+                .collect();
             if cands.is_empty() {
                 parent.push(-1);
                 labels[i] = next_label;
@@ -73,7 +80,7 @@ pub fn despeckle(mask: &[u8], w: usize, h: usize, min_area: usize) -> Vec<u8> {
         }
     }
     let mut area = vec![0i64; (comps + 1) as usize];
-    for (i, l) in labels.iter_mut().enumerate() {
+    for l in labels.iter_mut() {
         if *l == 0 {
             continue;
         }
@@ -81,11 +88,14 @@ pub fn despeckle(mask: &[u8], w: usize, h: usize, min_area: usize) -> Vec<u8> {
         *l = map[r];
         area[*l as usize] += 1;
     }
+    // area/map/parent 均按「组件号」索引，遍历组件号是本算法的固有结构，
+    // 改迭代器反而需要额外映射，故豁免 needless_range_loop。
+    #[allow(clippy::needless_range_loop)]
     for c in 1..=(comps as usize) {
         if area[c] <= min_area as i64 {
-            for (i, l) in labels.iter().enumerate() {
+            for (o, l) in out.iter_mut().zip(labels.iter()) {
                 if *l as usize == c {
-                    out[i] = 0;
+                    *o = 0;
                 }
             }
         }
@@ -112,7 +122,11 @@ pub fn clean(mask: &[u8], w: usize, h: usize, cfg: &PostprocessConfig) -> Vec<u8
                 continue;
             }
             // 左邻 & 上邻（8 连通）
-            let left = if x > 0 && mask[i - 1] > 0 { Some(labels[i - 1]) } else { None };
+            let left = if x > 0 && mask[i - 1] > 0 {
+                Some(labels[i - 1])
+            } else {
+                None
+            };
             let up = if y > 0 && mask[row_prev + x] > 0 {
                 Some(labels[row_prev + x])
             } else {
@@ -128,7 +142,10 @@ pub fn clean(mask: &[u8], w: usize, h: usize, cfg: &PostprocessConfig) -> Vec<u8
             } else {
                 None
             };
-            let mut cands: Vec<i32> = [left, up, up_left, up_right].into_iter().flatten().collect();
+            let mut cands: Vec<i32> = [left, up, up_left, up_right]
+                .into_iter()
+                .flatten()
+                .collect();
             if cands.is_empty() {
                 parent.push(-1);
                 labels[i] = next_label;
@@ -183,7 +200,6 @@ pub fn clean(mask: &[u8], w: usize, h: usize, cfg: &PostprocessConfig) -> Vec<u8
         min_y[c] = min_y[c].min(y);
         max_y[c] = max_y[c].max(y);
     }
-    let cx = (w / 2) as i64;
     let band_y0 = (h as f64 * (0.5 - cfg.center_tolerance)) as i64;
     let band_y1 = (h as f64 * (0.5 + cfg.center_tolerance)) as i64;
     // --- 过滤输出 ---
@@ -205,7 +221,10 @@ pub fn clean(mask: &[u8], w: usize, h: usize, cfg: &PostprocessConfig) -> Vec<u8
             continue;
         }
         if cfg.touch_edge
-            && (min_x[c] <= 0 || min_y[c] <= 0 || max_x[c] >= (w - 1) as i64 || max_y[c] >= (h - 1) as i64)
+            && (min_x[c] <= 0
+                || min_y[c] <= 0
+                || max_x[c] >= (w - 1) as i64
+                || max_y[c] >= (h - 1) as i64)
         {
             continue;
         }
@@ -224,6 +243,8 @@ pub fn clean(mask: &[u8], w: usize, h: usize, cfg: &PostprocessConfig) -> Vec<u8
     out
 }
 
+// parent 需在扫描中 push 扩容（见调用点），故保持 &mut Vec 而非切片。
+#[allow(clippy::ptr_arg)]
 fn find(parent: &mut Vec<i32>, mut i: i32) -> i32 {
     let mut root = i;
     while parent[root as usize] >= 0 {
@@ -237,6 +258,7 @@ fn find(parent: &mut Vec<i32>, mut i: i32) -> i32 {
     root
 }
 
+#[allow(clippy::ptr_arg)]
 fn union(parent: &mut Vec<i32>, a: i32, b: i32) {
     if a == b {
         return;
@@ -269,13 +291,7 @@ mod tests {
     fn despeckle_keeps_large_component_removes_small() {
         // 大字块（面积 6）+ 两个小噪点簇（面积 2、3）
         let m = mask_from_str(&[
-            "..##..",
-            "..##..",
-            "..#...",
-            "..#...",
-            "......",
-            "..#...",
-            ".....#",
+            "..##..", "..##..", "..#...", "..#...", "......", "..#...", ".....#",
         ]);
         // 面积：竖线 6、第5行单点 1、右下角单点 1 → despeckle(4) 应全部保留竖线
         let out = despeckle(&m, 6, 7, 4);

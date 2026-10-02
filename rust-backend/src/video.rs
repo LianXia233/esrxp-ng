@@ -5,7 +5,7 @@
 //! 失败自动回退软件解码（ffmpeg-next send_packet/receive_frame 流水线）。
 
 use anyhow::Result;
-use ffmpeg_next::ffi as ffi;
+use ffmpeg_next::ffi;
 use ffmpeg_next::format::context::Input;
 use ffmpeg_next::media::Type;
 use ffmpeg_next::software::scaling::{Context as ScaleCtx, Flags};
@@ -16,7 +16,7 @@ use ffmpeg_next::{format, frame, Error};
 pub struct FrameData {
     pub index: i64,
     pub time: f64,
-    pub rgb: Vec<u8>,          // packed RGB24, w*h*3
+    pub rgb: Vec<u8>, // packed RGB24, w*h*3
     pub width: usize,
     pub height: usize,
 }
@@ -24,6 +24,8 @@ pub struct FrameData {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DecodeBackend {
     Cuda,
+    /// 仅 probe_hw 探测路径可达；默认走 CPU（ESRXP_HWDEC=1 才启用 hw 探测）
+    #[allow(dead_code)]
     D3D11Va,
     Vaapi,
     Cpu,
@@ -95,7 +97,11 @@ impl VideoSource {
         let par = stream.parameters();
         let (width, height, pix_fmt_id) = unsafe {
             let p = par.as_ptr();
-            ((*p).width as usize, (*p).height as usize, (*p).format as i32)
+            (
+                (*p).width as usize,
+                (*p).height as usize,
+                (*p).format as i32,
+            )
         };
         let tb = stream.time_base();
         let time_base = if tb.denominator() > 0 {
@@ -109,7 +115,11 @@ impl VideoSource {
         } else {
             0.0
         };
-        let fps = if (1.0..=1000.0).contains(&fps) { fps } else { 25.0 };
+        let fps = if (1.0..=1000.0).contains(&fps) {
+            fps
+        } else {
+            25.0
+        };
         let dur_us = input.duration();
         let dur_stream = stream.duration() as f64 * time_base;
         let duration = if dur_us > 0 && (dur_us as f64 / 1e6) < 1e5 {
@@ -127,7 +137,8 @@ impl VideoSource {
             0
         };
         let codec_name = par.id().name().to_string();
-        let pix_enum: ffi::AVPixelFormat = unsafe { std::mem::transmute::<i32, ffi::AVPixelFormat>(pix_fmt_id) };
+        let pix_enum: ffi::AVPixelFormat =
+            unsafe { std::mem::transmute::<i32, ffi::AVPixelFormat>(pix_fmt_id) };
         let pix_fmt = Pixel::from(pix_enum)
             .descriptor()
             .map(|d| d.name().to_string())
@@ -136,8 +147,14 @@ impl VideoSource {
         // 存在堆损坏（0xC0000374，preview/rip 实测必崩；Linux CPU 路径从不复现）。
         // 本工具为离线处理场景，CPU 软解足够，默认回退 CPU；
         // 设 ESRXP_HWDEC=1 可强制启用 hw 探测，仅用于后续排查。
-        let hwdec_env = std::env::var("ESRXP_HWDEC").map(|v| v == "1").unwrap_or(false);
-        let backend = if hwdec_env { probe_hw() } else { DecodeBackend::Cpu };
+        let hwdec_env = std::env::var("ESRXP_HWDEC")
+            .map(|v| v == "1")
+            .unwrap_or(false);
+        let backend = if hwdec_env {
+            probe_hw()
+        } else {
+            DecodeBackend::Cpu
+        };
         Ok(Self {
             path: path.to_string(),
             width,
@@ -156,10 +173,17 @@ impl VideoSource {
 
     /// seek 到目标秒附近关键帧（av_seek_frame, BACKWARD）。
     pub fn seek_seconds(&mut self, seconds: f64) -> Result<()> {
-        let stream = self.input.streams().best(Type::Video)
+        let stream = self
+            .input
+            .streams()
+            .best(Type::Video)
             .ok_or_else(|| anyhow::anyhow!("no video stream"))?;
         let tb = stream.time_base();
-        let den = if tb.denominator() > 0 { tb.denominator() as i64 } else { 1 };
+        let den = if tb.denominator() > 0 {
+            tb.denominator() as i64
+        } else {
+            1
+        };
         let ts = (seconds * den as f64).round() as i64;
         unsafe {
             ffi::av_seek_frame(
@@ -205,18 +229,28 @@ impl VideoSource {
         Ok(())
     }
 
-    fn decode_sw<F>(&mut self, start: i64, end: i64, step: i64,
-                    produced: &mut bool, cb: &mut F) -> Result<()>
+    fn decode_sw<F>(
+        &mut self,
+        start: i64,
+        end: i64,
+        step: i64,
+        produced: &mut bool,
+        cb: &mut F,
+    ) -> Result<()>
     where
         F: FnMut(FrameData) -> Result<()>,
     {
         self.seek_seconds(start as f64 / self.fps - 0.2)?;
         let stream_index = self.stream_index;
-        let stream = self.input.streams().best(Type::Video)
+        let stream = self
+            .input
+            .streams()
+            .best(Type::Video)
             .ok_or_else(|| anyhow::anyhow!("no video"))?;
-        let mut decoder = ffmpeg_next::codec::context::Context::from_parameters(stream.parameters())?
-            .decoder()
-            .video()?;
+        let mut decoder =
+            ffmpeg_next::codec::context::Context::from_parameters(stream.parameters())?
+                .decoder()
+                .video()?;
         let mut scaler = ScaleCtx::get(
             decoder.format(),
             decoder.width(),
@@ -228,8 +262,8 @@ impl VideoSource {
         )?;
         let mut counter: i64 = -1;
         let mut first_frame = true;
-        let mut packets = self.input.packets();
-        'outer: while let Some((s, packet)) = packets.next() {
+        let packets = self.input.packets();
+        'outer: for (s, packet) in packets {
             if s.index() != stream_index {
                 continue;
             }
@@ -277,19 +311,33 @@ impl VideoSource {
 
     /// 硬件解码（NVDEC/D3D11VA/VAAPI）：hw 帧接收后 transfer 回系统内存再走管线。
     /// 返回 Ok(true) 表示 hw 路径成功产出；Ok(false) 表示应回退软件。
-    fn try_decode_hw<F>(&mut self, start: i64, end: i64, step: i64,
-                        produced: &mut bool, cb: &mut F) -> Result<bool>
+    fn try_decode_hw<F>(
+        &mut self,
+        start: i64,
+        end: i64,
+        step: i64,
+        produced: &mut bool,
+        cb: &mut F,
+    ) -> Result<bool>
     where
         F: FnMut(FrameData) -> Result<()>,
     {
         let backend = self.decode_backend;
-        let stream = self.input.streams().best(Type::Video)
+        let stream = self
+            .input
+            .streams()
+            .best(Type::Video)
             .ok_or_else(|| anyhow::anyhow!("no video"))?;
         // 创建硬件设备上下文
         let mut hw_ctx: *mut ffi::AVBufferRef = std::ptr::null_mut();
         let rc = unsafe {
-            ffi::av_hwdevice_ctx_create(&mut hw_ctx, backend.hw_ffi_type(),
-                                        std::ptr::null(), std::ptr::null_mut(), 0)
+            ffi::av_hwdevice_ctx_create(
+                &mut hw_ctx,
+                backend.hw_ffi_type(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                0,
+            )
         };
         if rc < 0 || hw_ctx.is_null() {
             return Ok(false);
@@ -366,10 +414,10 @@ impl VideoSource {
         }
         // 解码循环（hw 帧 → transfer → sw 帧 → swscale → RGB24）
         let mut result = Ok(true);
-        let mut packets = self.input.packets();
+        let packets = self.input.packets();
         let mut counter: i64 = -1;
         let mut first_frame = true;
-        'outer: while let Some((s, packet)) = packets.next() {
+        'outer: for (s, packet) in packets {
             if s.index() != self.stream_index {
                 continue;
             }
@@ -382,16 +430,14 @@ impl VideoSource {
             pkt.pts = packet.pts().unwrap_or(ffi::AV_NOPTS_VALUE);
             pkt.dts = packet.dts().unwrap_or(ffi::AV_NOPTS_VALUE);
             pkt.flags = packet.flags().bits();
-            let rc = unsafe { ffi::avcodec_send_packet(codec_ctx, &mut pkt) };
+            let rc = unsafe { ffi::avcodec_send_packet(codec_ctx, &pkt) };
             if rc < 0 {
                 continue;
             }
             loop {
-                let mut hw_frame = unsafe { frame::Video::empty() };
-                let rc = unsafe {
-                    ffi::avcodec_receive_frame(codec_ctx, hw_frame.as_mut_ptr())
-                };
-                if rc == ffi::AVERROR_EOF as i32 || rc == -11 {
+                let mut hw_frame = frame::Video::empty();
+                let rc = unsafe { ffi::avcodec_receive_frame(codec_ctx, hw_frame.as_mut_ptr()) };
+                if rc == ffi::AVERROR_EOF || rc == -11 {
                     break;
                 }
                 if rc < 0 {
@@ -414,15 +460,16 @@ impl VideoSource {
                     continue;
                 }
                 // 转回系统内存
-                let mut sw = unsafe { frame::Video::empty() };
-                let tr = unsafe { ffi::av_hwframe_transfer_data(sw.as_mut_ptr(), hw_frame.as_ptr(), 0) };
+                let mut sw = frame::Video::empty();
+                let tr =
+                    unsafe { ffi::av_hwframe_transfer_data(sw.as_mut_ptr(), hw_frame.as_ptr(), 0) };
                 if tr < 0 {
                     continue;
                 }
                 let mut scaler = match ScaleCtx::get(
                     sw.format(),
-                    sw.width() as u32,
-                    sw.height() as u32,
+                    sw.width(),
+                    sw.height(),
                     Pixel::RGB24,
                     self.width as u32,
                     self.height as u32,
@@ -462,7 +509,6 @@ impl VideoSource {
     }
 }
 
-
 /// 硬件解码探测：CUDA → D3D11VA(Win) → VAAPI(Linux)，均失败回 CPU。
 pub fn probe_hw() -> DecodeBackend {
     let mut order: Vec<DecodeBackend> = Vec::new();
@@ -479,8 +525,13 @@ pub fn probe_hw() -> DecodeBackend {
     for b in order {
         let mut ctx: *mut ffi::AVBufferRef = std::ptr::null_mut();
         let rc = unsafe {
-            ffi::av_hwdevice_ctx_create(&mut ctx, b.hw_ffi_type(),
-                                        std::ptr::null(), std::ptr::null_mut(), 0)
+            ffi::av_hwdevice_ctx_create(
+                &mut ctx,
+                b.hw_ffi_type(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                0,
+            )
         };
         if rc >= 0 && !ctx.is_null() {
             unsafe { ffi::av_buffer_unref(&mut ctx) };
@@ -514,7 +565,7 @@ fn fps_of(_idx: i64, _tb: f64) -> f64 {
 /// 从 swscale 输出的 packed RGB24 帧按行拷贝（行对齐可能 > w*3）。
 fn copy_rgb24(frame: &frame::Video, width: usize, height: usize) -> Vec<u8> {
     let src = frame.data(0);
-    let stride = frame.stride(0) as usize;
+    let stride = frame.stride(0);
     let mut out = Vec::with_capacity(width * height * 3);
     for row in 0..height {
         out.extend_from_slice(&src[row * stride..row * stride + width * 3]);

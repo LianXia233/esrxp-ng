@@ -74,8 +74,13 @@ pub fn write_srt(events: &[SubtitleEvent], cfg: &AppConfig, out: &Path) -> Resul
 }
 
 // ---------------------------------------------------------------- SSA
-pub fn write_ssa(events: &[SubtitleEvent], video_w: usize, video_h: usize,
-                 cfg: &AppConfig, out: &Path) -> Result<()> {
+pub fn write_ssa(
+    events: &[SubtitleEvent],
+    video_w: usize,
+    video_h: usize,
+    cfg: &AppConfig,
+    out: &Path,
+) -> Result<()> {
     let st = &cfg.style;
     let mut lines = String::new();
     lines.push_str("[Script Info]\nScriptType: v4.00+\n");
@@ -83,13 +88,25 @@ pub fn write_ssa(events: &[SubtitleEvent], video_w: usize, video_h: usize,
     lines.push_str("WrapStyle: 0\nScaledBorderAndShadow: yes\n\n");
     lines.push_str("[V4+ Styles]\n");
     lines.push_str("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n");
-    let style_name = if st.no_default_style { "esrxpExtracted" } else { "Default" };
+    let style_name = if st.no_default_style {
+        "esrxpExtracted"
+    } else {
+        "Default"
+    };
     lines.push_str(&format!(
         "Style: {style_name},{},36,{},{},{},{},0,0,0,0,100,100,0,0,1,{},{},2,10,10,10,1\n\n",
-        st.font_name, st.primary_color, st.secondary_color,
-        st.outline_color_ssa, st.shadow_color, st.outline_width, st.shadow_depth));
+        st.font_name,
+        st.primary_color,
+        st.secondary_color,
+        st.outline_color_ssa,
+        st.shadow_color,
+        st.outline_width,
+        st.shadow_depth
+    ));
     lines.push_str("[Events]\n");
-    lines.push_str("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n");
+    lines.push_str(
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n",
+    );
     for ev in events {
         let (start, end) = shift(ev, st.time_shift_10ms);
         let (bx, by, _bw, _bh) = ev.bbox;
@@ -103,7 +120,11 @@ pub fn write_ssa(events: &[SubtitleEvent], video_w: usize, video_h: usize,
         };
         lines.push_str(&format!(
             "Dialogue: 0,{}, {},{},,0,0,0,,{}\n",
-            ass_time(start), ass_time(end), style_name, text));
+            ass_time(start),
+            ass_time(end),
+            style_name,
+            text
+        ));
     }
     fs::write(out, lines)?;
     Ok(())
@@ -196,7 +217,7 @@ fn trace_contours(mask: &[u8], w: usize, h: usize) -> Vec<Vec<(i64, i64)>> {
         if lefts.len() < 3 {
             continue; // 过小组件
         }
-        let mut l = rdp(&lefts, 0.5);
+        let l = rdp(&lefts, 0.5);
         let mut r = rdp(&rights, 0.5);
         r.reverse();
         let mut poly = l;
@@ -213,6 +234,8 @@ fn trace_contours(mask: &[u8], w: usize, h: usize) -> Vec<Vec<(i64, i64)>> {
     out
 }
 
+/// 8 邻域步进（Moore 轮廓追踪遗留，保留供轮廓算法调试复用）
+#[allow(dead_code)]
 fn step8(x: i64, y: i64, d: i64) -> (i64, i64) {
     const DX: [i64; 8] = [1, 1, 0, -1, -1, -1, 0, 1];
     const DY: [i64; 8] = [0, 1, 1, 1, 0, -1, -1, -1];
@@ -233,7 +256,7 @@ fn rdp(points: &[(i64, i64)], eps: f64) -> Vec<(i64, i64)> {
         }
         let t = (((p.0 - a.0) * dx + (p.1 - a.1) * dy) as f64 / len2).clamp(0.0, 1.0);
         let (px, py) = (a.0 as f64 + t * dx as f64, a.1 as f64 + t * dy as f64);
-        (((p.0 as f64 - px).powi(2) + (p.1 as f64 - py).powi(2))).sqrt()
+        ((p.0 as f64 - px).powi(2) + (p.1 as f64 - py).powi(2)).sqrt()
     }
     let mut max_d = 0.0f64;
     let mut idx = 0usize;
@@ -260,7 +283,11 @@ fn rgb_to_yuv(rgb: (u8, u8, u8)) -> (u8, u8, u8) {
     let y = (0.299 * r + 0.587 * g + 0.114 * b) as i64;
     let u = (-0.169 * r - 0.331 * g + 0.5 * b + 128.0) as i64;
     let v = (0.5 * r - 0.419 * g - 0.081 * b + 128.0) as i64;
-    (y.clamp(0, 255) as u8, u.clamp(0, 255) as u8, v.clamp(0, 255) as u8)
+    (
+        y.clamp(0, 255) as u8,
+        u.clamp(0, 255) as u8,
+        v.clamp(0, 255) as u8,
+    )
 }
 
 fn rle_encode_row(nibbles: &[u8]) -> Vec<u8> {
@@ -290,8 +317,13 @@ fn rle_encode_row(nibbles: &[u8]) -> Vec<u8> {
     out
 }
 
-pub fn write_vobsub(events: &[SubtitleEvent], video_w: usize, video_h: usize,
-                    cfg: &AppConfig, out_stem: &Path) -> Result<(String, String)> {
+pub fn write_vobsub(
+    events: &[SubtitleEvent],
+    video_w: usize,
+    video_h: usize,
+    cfg: &AppConfig,
+    out_stem: &Path,
+) -> Result<(String, String)> {
     let main = cfg.filter.subtitle_color;
     let outline = cfg.filter.outline_color;
     let st = &cfg.style;
@@ -318,7 +350,9 @@ pub fn write_vobsub(events: &[SubtitleEvent], video_w: usize, video_h: usize,
     // 对齐 esrXP 逆向取证：VobSub v7 模板 + 注释 + 16 项 YUV 调色板
     let mut idx = String::new();
     idx.push_str("# VobSub index file, v7 (do not modify this line!)\n");
-    idx.push_str(&format!("size: {video_w}x{video_h}\norg: 0, 0\nscale: 100%, 100%\n"));
+    idx.push_str(&format!(
+        "size: {video_w}x{video_h}\norg: 0, 0\nscale: 100%, 100%\n"
+    ));
     idx.push_str("smooth: OFF\nfade: 0, 0\nalign: 0, 0\ntime offset: 0\nforced subs: OFF\n");
     idx.push_str("# Custom colors (transp idxs and the four colors)\n");
     idx.push_str("custom colors: OFF, tridx: 1110, colors: 0, 0, ffffff, 000000\n");
@@ -337,11 +371,18 @@ pub fn write_vobsub(events: &[SubtitleEvent], video_w: usize, video_h: usize,
     idx.push_str("# Force subtitle placement relative to (org.x, org.y)\n");
     idx.push_str("id: en, index: 0\n");
     for (start, _end, off) in &offsets {
-        idx.push_str(&format!("timestamp: {}, filepos: {:09x}\n", vobsub_time(*start), off));
+        idx.push_str(&format!(
+            "timestamp: {}, filepos: {:09x}\n",
+            vobsub_time(*start),
+            off
+        ));
     }
     let idx_path = out_stem.with_extension("idx");
     fs::write(&idx_path, idx)?;
-    Ok((sub_path.display().to_string(), idx_path.display().to_string()))
+    Ok((
+        sub_path.display().to_string(),
+        idx_path.display().to_string(),
+    ))
 }
 
 fn encode_vobsub_frame(ev: &SubtitleEvent, main: (u8, u8, u8), outline: (u8, u8, u8)) -> Vec<u8> {
@@ -354,10 +395,12 @@ fn encode_vobsub_frame(ev: &SubtitleEvent, main: (u8, u8, u8), outline: (u8, u8,
             continue;
         }
         let (r, g, b) = (px[0] as i32, px[1] as i32, px[2] as i32);
-        let d_main = (r - main.0 as i32).abs()
+        let d_main = (r - main.0 as i32)
+            .abs()
             .max((g - main.1 as i32).abs())
             .max((b - main.2 as i32).abs());
-        let d_out = (r - outline.0 as i32).abs()
+        let d_out = (r - outline.0 as i32)
+            .abs()
             .max((g - outline.1 as i32).abs())
             .max((b - outline.2 as i32).abs());
         nib[i] = if d_out < d_main { 2 } else { 1 };
@@ -406,7 +449,11 @@ fn encode_vobsub_frame(ev: &SubtitleEvent, main: (u8, u8, u8), outline: (u8, u8,
 ///   1. mask 双线性采样 + N×N 超采样 → 每个输出像素的「覆盖率」0..1（二值场 → 连续场）
 ///   2. 按覆盖率在前景 / 背景色之间混合 → 边缘连续灰度，平滑且不失真
 ///   3. color 模式取原视频像素做前景，保留硬字幕自身的高光与描边
-pub fn write_ocr_png(events: &[SubtitleEvent], cfg: &AppConfig, out_dir: &Path) -> Result<Vec<String>> {
+pub fn write_ocr_png(
+    events: &[SubtitleEvent],
+    cfg: &AppConfig,
+    out_dir: &Path,
+) -> Result<Vec<String>> {
     let ocr = &cfg.output.ocr;
     let per_image = ocr.per_image.max(1) as usize;
     let ext = normalized_ext(&ocr.format);
@@ -416,14 +463,16 @@ pub fn write_ocr_png(events: &[SubtitleEvent], cfg: &AppConfig, out_dir: &Path) 
     let mut i = 0usize;
     while i < events.len() {
         let batch: Vec<&SubtitleEvent> = events[i..(i + per_image).min(events.len())]
-            .iter().filter(|ev| !ev.mask.is_empty() && ev.mask.iter().any(|v| *v > 0))
+            .iter()
+            .filter(|ev| !ev.mask.is_empty() && ev.mask.iter().any(|v| *v > 0))
             .collect();
         if batch.is_empty() {
             i += per_image;
             continue;
         }
         img_idx += 1;
-        let tiles: Vec<image::RgbaImage> = batch.iter()
+        let tiles: Vec<image::RgbaImage> = batch
+            .iter()
             .filter_map(|ev| render_subtitle_tile(ev, ocr))
             .map(|t| apply_tile_postprocess(t, ocr))
             .collect();
@@ -467,11 +516,51 @@ pub fn write_ocr_png(events: &[SubtitleEvent], cfg: &AppConfig, out_dir: &Path) 
         }
         let p = out_dir.join(format!("subtitle_{:04}.{ext}", img_idx));
         save_image(&img, &p, &ext, ocr.quality)?;
-        crate::logging::debug(format!("OCR 位图 {}x{} → {}", img.width(), img.height(), p.display()));
+        crate::logging::debug(format!(
+            "OCR 位图 {}x{} → {}",
+            img.width(),
+            img.height(),
+            p.display()
+        ));
         files.push(p.display().to_string());
         i += per_image;
     }
+    // 清理上一次遗留的位图：本次写出数量减少（如字幕管理器里删了字幕）后，
+    // 旧序号文件会留在目录里被误认为本次产物。逐个删掉超出本次编号范围的
+    // subtitle_*.{ext}，仅限本函数自己生成的命名前缀，不碰用户其他文件。
+    if let Ok(rd) = fs::read_dir(out_dir) {
+        for e in rd.flatten() {
+            let path = e.path();
+            let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let Some(num) = ocr_stem_index(name) else {
+                continue;
+            };
+            let keep = num <= img_idx;
+            let matches_ext = path
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|e| e.eq_ignore_ascii_case(&ext))
+                .unwrap_or(false);
+            if !keep && matches_ext {
+                let _ = fs::remove_file(&path);
+            }
+        }
+    }
     Ok(files)
+}
+
+/// 从位图文件名解析序号：`subtitle_0003.png` / `subtitle_0004_top.jpg` → Some(3/4)。
+/// 非本函数生成的命名（无 `subtitle_` 前缀、序号不可解析）返回 None，调用方据此跳过。
+fn ocr_stem_index(name: &str) -> Option<usize> {
+    name.strip_prefix("subtitle_")?
+        .split('.')
+        .next()?
+        .split('_')
+        .next()?
+        .parse::<usize>()
+        .ok()
 }
 
 /// 归一化扩展名：jpg/jpeg → jpg，bmp → bmp，其余一律 png（避免非法扩展名落到磁盘）。
@@ -514,7 +603,11 @@ fn sample_mask(mask: &[u8], w: usize, h: usize, fx: f64, fy: f64) -> f64 {
     let tx = x - x0 as f64;
     let ty = y - y0 as f64;
     let g = |ix: usize, iy: usize| -> f64 {
-        if mask[iy * w + ix] > 0 { 1.0 } else { 0.0 }
+        if mask[iy * w + ix] > 0 {
+            1.0
+        } else {
+            0.0
+        }
     };
     let a = g(x0, y0) * (1.0 - tx) + g(x1, y0) * tx;
     let b = g(x0, y1) * (1.0 - tx) + g(x1, y1) * tx;
@@ -540,7 +633,13 @@ fn sample_rgb(img: &[u8], w: usize, h: usize, fx: f64, fy: f64) -> (f64, f64, f6
         let a = g(x0, y0) * (1.0 - tx) + g(x1, y0) * tx;
         let b = g(x0, y1) * (1.0 - tx) + g(x1, y1) * tx;
         let v = a * (1.0 - ty) + b * ty;
-        if c == 0 { out.0 = v; } else if c == 1 { out.1 = v; } else { out.2 = v; }
+        if c == 0 {
+            out.0 = v;
+        } else if c == 1 {
+            out.1 = v;
+        } else {
+            out.2 = v;
+        }
     }
     out
 }
@@ -577,11 +676,22 @@ pub fn event_from_roi(rgb: &[u8], rw: usize, rh: usize, mask: &[u8]) -> Option<S
         }
     }
     Some(SubtitleEvent {
-        start: 0.0, end: 0.0, start_frame: 0, end_frame: 0,
-        image, image_w: bw as usize, image_h: bh as usize,
-        mask: sub_mask, roi_mask: mask.to_vec(), roi_w: rw, roi_h: rh,
-        bbox: (min_x, min_y, bw, bh), roi_origin: (0, 0),
-        diff_frames: 0, source_frame: 0, deleted: false,
+        start: 0.0,
+        end: 0.0,
+        start_frame: 0,
+        end_frame: 0,
+        image,
+        image_w: bw as usize,
+        image_h: bh as usize,
+        mask: sub_mask,
+        roi_mask: mask.to_vec(),
+        roi_w: rw,
+        roi_h: rh,
+        bbox: (min_x, min_y, bw, bh),
+        roi_origin: (0, 0),
+        diff_frames: 0,
+        source_frame: 0,
+        deleted: false,
     })
 }
 
@@ -607,12 +717,20 @@ pub fn render_subtitle_tile(ev: &SubtitleEvent, ocr: &OcrConfig) -> Option<image
     let mode = ocr.color_mode.trim().to_ascii_lowercase();
     // color 模式需要真实像素；旧工程缺 image 时自动降级为前景/背景双色混合
     let use_pixels = mode == "color" && ev.image.len() >= sw * sh * 3;
-    let ss = if ocr.antialias { ocr.supersample.clamp(1, 4) as usize } else { 1usize };
+    let ss = if ocr.antialias {
+        ocr.supersample.clamp(1, 4) as usize
+    } else {
+        1usize
+    };
     let step = 1.0 / ss as f64;
     let inv = step * step;
     // 第一趟：由二值 mask 重建「覆盖率场」（连续值 0..1，边缘天然软化）
     let mut cov = vec![0.0f64; dw * dh];
-    let mut px: Option<Vec<[f64; 3]>> = if use_pixels { Some(vec![[0.0f64; 3]; dw * dh]) } else { None };
+    let mut px: Option<Vec<[f64; 3]>> = if use_pixels {
+        Some(vec![[0.0f64; 3]; dw * dh])
+    } else {
+        None
+    };
     for y in 0..dh {
         for x in 0..dw {
             let mut c = 0.0f64;
@@ -639,7 +757,7 @@ pub fn render_subtitle_tile(ev: &SubtitleEvent, ocr: &OcrConfig) -> Option<image
         }
     }
     // 笔画加粗：对覆盖率场做最大值滤波（形态学膨胀），软边不被破坏，细笔画变实
-    let rad = ocr.stroke_dilate.clamp(0, 4) as i64;
+    let rad = ocr.stroke_dilate.clamp(0, 4);
     let cov = if rad > 0 {
         let mut d = vec![0.0f64; dw * dh];
         for y in 0..dh {
@@ -676,7 +794,11 @@ pub fn render_subtitle_tile(ev: &SubtitleEvent, ocr: &OcrConfig) -> Option<image
             let c = cov[y * dw + x];
             // binary 为二值硬边（阈值可调）；其余模式按覆盖率连续混合
             let alpha = if mode == "binary" {
-                if c >= bin_th { 1.0 } else { 0.0 }
+                if c >= bin_th {
+                    1.0
+                } else {
+                    0.0
+                }
             } else if (gamma - 1.0).abs() < 1e-6 {
                 c
             } else {
@@ -692,12 +814,16 @@ pub fn render_subtitle_tile(ev: &SubtitleEvent, ocr: &OcrConfig) -> Option<image
             let mix = |c: f64, b: f64| -> u8 {
                 (c * alpha + b * (1.0 - alpha)).clamp(0.0, 255.0).round() as u8
             };
-            out.put_pixel(x as u32, y as u32, image::Rgba([
-                mix(fr, bgc[0] as f64),
-                mix(fg, bgc[1] as f64),
-                mix(fb, bgc[2] as f64),
-                255,
-            ]));
+            out.put_pixel(
+                x as u32,
+                y as u32,
+                image::Rgba([
+                    mix(fr, bgc[0] as f64),
+                    mix(fg, bgc[1] as f64),
+                    mix(fb, bgc[2] as f64),
+                    255,
+                ]),
+            );
         }
     }
     Some(out)
@@ -705,8 +831,12 @@ pub fn render_subtitle_tile(ev: &SubtitleEvent, ocr: &OcrConfig) -> Option<image
 
 /// 单条字幕后处理：裁剪 → 留边（单位均为输出像素，UI 所见即所得）。
 pub fn apply_tile_postprocess(img: image::RgbaImage, ocr: &OcrConfig) -> image::RgbaImage {
-    let (ct, cb, cl, cr) = (ocr.crop_top.max(0), ocr.crop_bottom.max(0),
-                            ocr.crop_left.max(0), ocr.crop_right.max(0));
+    let (ct, cb, cl, cr) = (
+        ocr.crop_top.max(0),
+        ocr.crop_bottom.max(0),
+        ocr.crop_left.max(0),
+        ocr.crop_right.max(0),
+    );
     let pad = ocr.padding.max(0) as u32;
     if ct == 0 && cb == 0 && cl == 0 && cr == 0 && pad == 0 {
         return img;
@@ -748,14 +878,20 @@ pub fn apply_canvas_postprocess(img: image::RgbaImage, ocr: &OcrConfig) -> image
         270 => img_rotate_ccw(&img),
         _ => img,
     };
-    if ocr.flip_h { img = img_flip_h(&img); }
-    if ocr.flip_v { img = img_flip_v(&img); }
+    if ocr.flip_h {
+        img = img_flip_h(&img);
+    }
+    if ocr.flip_v {
+        img = img_flip_v(&img);
+    }
     if ocr.brightness != 0 || ocr.contrast != 0 || ocr.grayscale {
         img = img_tone(&img, ocr.brightness, ocr.contrast, ocr.grayscale);
     }
     let mw = ocr.max_width.max(0) as u32;
     if mw > 0 && img.width() > mw {
-        let nh = ((img.height() as f64) * (mw as f64 / img.width() as f64)).round().max(1.0) as u32;
+        let nh = ((img.height() as f64) * (mw as f64 / img.width() as f64))
+            .round()
+            .max(1.0) as u32;
         img = image::imageops::resize(&img, mw, nh, filter_from_name(&ocr.scale_filter));
     }
     img
@@ -817,7 +953,12 @@ fn img_flip_v(img: &image::RgbaImage) -> image::RgbaImage {
 }
 
 /// 亮度 / 对比度 / 灰度：对比度采用标准系数 f = 259(c+255) / 255(259-c)。
-fn img_tone(img: &image::RgbaImage, brightness: i64, contrast: i64, grayscale: bool) -> image::RgbaImage {
+fn img_tone(
+    img: &image::RgbaImage,
+    brightness: i64,
+    contrast: i64,
+    grayscale: bool,
+) -> image::RgbaImage {
     let b = brightness.clamp(-100, 100) as f64;
     let c = (contrast.clamp(-100, 100) as f64) * 2.55;
     let f = (259.0 * (c + 255.0)) / (255.0 * (259.0 - c));
@@ -858,7 +999,12 @@ fn save_image(img: &image::RgbaImage, path: &Path, fmt: &str, quality: i64) -> R
         let rgb = image::DynamicImage::ImageRgba8(img.clone()).to_rgb8();
         let mut f = fs::File::create(path)?;
         let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut f, q);
-        enc.encode(rgb.as_raw(), rgb.width(), rgb.height(), image::ExtendedColorType::Rgb8)?;
+        enc.encode(
+            rgb.as_raw(),
+            rgb.width(),
+            rgb.height(),
+            image::ExtendedColorType::Rgb8,
+        )?;
     } else {
         img.save(path)?;
     }
@@ -877,7 +1023,8 @@ fn find_blank_split(img: &image::RgbaImage, bg: [u8; 3], tol: u8) -> Option<u32>
             let p = img.get_pixel(x, y);
             if (p[0] as i32 - bg[0] as i32).abs() > tol
                 || (p[1] as i32 - bg[1] as i32).abs() > tol
-                || (p[2] as i32 - bg[2] as i32).abs() > tol {
+                || (p[2] as i32 - bg[2] as i32).abs() > tol
+            {
                 blank = false;
                 break;
             }
@@ -913,7 +1060,11 @@ fn find_blank_split(img: &image::RgbaImage, bg: [u8; 3], tol: u8) -> Option<u32>
     }
 }
 
-fn split_vertical(img: &image::RgbaImage, y: u32, bg: [u8; 3]) -> (image::RgbaImage, image::RgbaImage) {
+fn split_vertical(
+    img: &image::RgbaImage,
+    y: u32,
+    bg: [u8; 3],
+) -> (image::RgbaImage, image::RgbaImage) {
     let (w, h) = (img.width(), img.height());
     let mut top = image::RgbaImage::new(w, y.max(1));
     let mut bottom = image::RgbaImage::new(w, h.saturating_sub(y).max(1));
@@ -938,10 +1089,20 @@ fn split_vertical(img: &image::RgbaImage, y: u32, bg: [u8; 3]) -> (image::RgbaIm
 
 /// SRT + 位图（对齐 esrXP "SubRip with bitmap"）：写出纯时间轴 SRT，
 /// 同时每字幕输出独立 .bmp（白底黑字，对应时间区间，不含文本）。
-pub fn write_srt_bitmap(events: &[SubtitleEvent], cfg: &AppConfig, out: &Path) -> Result<(String, Vec<String>)> {
+pub fn write_srt_bitmap(
+    events: &[SubtitleEvent],
+    cfg: &AppConfig,
+    out: &Path,
+) -> Result<(String, Vec<String>)> {
     write_srt(events, cfg, out)?;
-    let stem = out.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "subs".into());
-    let dir = out.parent().unwrap_or_else(|| Path::new(".")).join(format!("{stem}_subs"));
+    let stem = out
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "subs".into());
+    let dir = out
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(format!("{stem}_subs"));
     fs::create_dir_all(&dir)?;
     let mut files = Vec::new();
     for (i, ev) in events.iter().enumerate() {
@@ -963,19 +1124,27 @@ pub fn write_srt_bitmap(events: &[SubtitleEvent], cfg: &AppConfig, out: &Path) -
 }
 
 // ---------------------------------------------------------------- JSON
-pub fn write_json_timeline(events: &[SubtitleEvent], video_info: &serde_json::Value,
-                           cfg: &AppConfig, out: &Path) -> Result<()> {
+pub fn write_json_timeline(
+    events: &[SubtitleEvent],
+    video_info: &serde_json::Value,
+    cfg: &AppConfig,
+    out: &Path,
+) -> Result<()> {
     let st = &cfg.style;
-    let subs: Vec<serde_json::Value> = events.iter().enumerate().map(|(i, ev)| {
-        let (start, end) = shift(ev, st.time_shift_10ms);
-        json!({
-            "index": i + 1, "start": (start * 10000.0).round() / 10000.0,
-            "end": (end * 10000.0).round() / 10000.0,
-            "start_frame": ev.start_frame, "end_frame": ev.end_frame,
-            "bbox": ev.bbox, "roi_origin": ev.roi_origin,
-            "diff_frames": ev.diff_frames,
+    let subs: Vec<serde_json::Value> = events
+        .iter()
+        .enumerate()
+        .map(|(i, ev)| {
+            let (start, end) = shift(ev, st.time_shift_10ms);
+            json!({
+                "index": i + 1, "start": (start * 10000.0).round() / 10000.0,
+                "end": (end * 10000.0).round() / 10000.0,
+                "start_frame": ev.start_frame, "end_frame": ev.end_frame,
+                "bbox": ev.bbox, "roi_origin": ev.roi_origin,
+                "diff_frames": ev.diff_frames,
+            })
         })
-    }).collect();
+        .collect();
     let data = json!({
         "video": video_info, "style": {"time_shift_10ms": st.time_shift_10ms},
         "count": events.len(), "subtitles": subs,
@@ -984,21 +1153,38 @@ pub fn write_json_timeline(events: &[SubtitleEvent], video_info: &serde_json::Va
     Ok(())
 }
 
-pub fn write_project(events: &[SubtitleEvent], video_path: &str, cfg: &AppConfig,
-                     out: &Path, artifacts: &serde_json::Value) -> Result<()> {
+/// 不含 filtered 候选的工程写出（薄封装）。保留供 examples / 外部调用复用。
+#[allow(dead_code)]
+pub fn write_project(
+    events: &[SubtitleEvent],
+    video_path: &str,
+    cfg: &AppConfig,
+    out: &Path,
+    artifacts: &serde_json::Value,
+) -> Result<()> {
     write_esr(events, &[], video_path, cfg, out, artifacts)
 }
 
 /// .esr 工程文件（对齐 esrXP Save As .esr）：完整保存配置、字幕（含位图与
 /// 删除标记）、被过滤候选，供字幕管理器打开/编辑/重导出。
-pub fn write_esr(events: &[SubtitleEvent], filtered: &[SubtitleEvent], video_path: &str,
-                 cfg: &AppConfig, out: &Path, artifacts: &serde_json::Value) -> Result<()> {
-    let subs: Vec<serde_json::Value> = events.iter().enumerate().map(|(i, ev)| {
-        ev_to_json(ev, i + 1)
-    }).collect();
-    let flt: Vec<serde_json::Value> = filtered.iter().enumerate().map(|(i, ev)| {
-        ev_to_json(ev, i + 1)
-    }).collect();
+pub fn write_esr(
+    events: &[SubtitleEvent],
+    filtered: &[SubtitleEvent],
+    video_path: &str,
+    cfg: &AppConfig,
+    out: &Path,
+    artifacts: &serde_json::Value,
+) -> Result<()> {
+    let subs: Vec<serde_json::Value> = events
+        .iter()
+        .enumerate()
+        .map(|(i, ev)| ev_to_json(ev, i + 1))
+        .collect();
+    let flt: Vec<serde_json::Value> = filtered
+        .iter()
+        .enumerate()
+        .map(|(i, ev)| ev_to_json(ev, i + 1))
+        .collect();
     let data = json!({
         "format": "esrxp-ng/project", "version": 2,
         "video": video_path, "config": serde_json::to_value(cfg).unwrap_or(json!({})),
@@ -1024,7 +1210,9 @@ fn ev_to_json(ev: &SubtitleEvent, index: usize) -> serde_json::Value {
 }
 
 /// 读取 .esr 工程（v1/v2 兼容），返回 (events, filtered, video_path, config)。
-pub fn load_esr(path: &Path) -> Result<(Vec<SubtitleEvent>, Vec<SubtitleEvent>, String, AppConfig)> {
+pub fn load_esr(
+    path: &Path,
+) -> Result<(Vec<SubtitleEvent>, Vec<SubtitleEvent>, String, AppConfig)> {
     let data: serde_json::Value = serde_json::from_str(&fs::read_to_string(path)?)?;
     let video = data["video"].as_str().unwrap_or("").to_string();
     let cfg: AppConfig = serde_json::from_value(data["config"].clone()).unwrap_or_default();
@@ -1042,11 +1230,13 @@ pub fn load_esr(path: &Path) -> Result<(Vec<SubtitleEvent>, Vec<SubtitleEvent>, 
 
 fn json_to_ev(s: &serde_json::Value) -> SubtitleEvent {
     let get = |k: &str, d: i64| s.get(k).and_then(|v| v.as_i64()).unwrap_or(d);
-    let arr = |k: &str, i: usize| s.get(k)
-        .and_then(|v| v.as_array())
-        .and_then(|a| a.get(i))
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
+    let arr = |k: &str, i: usize| {
+        s.get(k)
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.get(i))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+    };
     let image = base64_decode(s.get("image_b64").and_then(|v| v.as_str()).unwrap_or(""));
     let mask = base64_decode(s.get("mask_b64").and_then(|v| v.as_str()).unwrap_or(""));
     let roi_mask = base64_decode(s.get("roi_mask_b64").and_then(|v| v.as_str()).unwrap_or(""));
@@ -1055,12 +1245,19 @@ fn json_to_ev(s: &serde_json::Value) -> SubtitleEvent {
         end: s.get("end").and_then(|v| v.as_f64()).unwrap_or(0.0),
         start_frame: get("start_frame", 0),
         end_frame: get("end_frame", 0),
-        image, mask, roi_mask,
+        image,
+        mask,
+        roi_mask,
         image_w: get("image_w", 0) as usize,
         image_h: get("image_h", 0) as usize,
         roi_w: get("roi_w", 0) as usize,
         roi_h: get("roi_h", 0) as usize,
-        bbox: (arr("bbox", 0), arr("bbox", 1), arr("bbox", 2), arr("bbox", 3)),
+        bbox: (
+            arr("bbox", 0),
+            arr("bbox", 1),
+            arr("bbox", 2),
+            arr("bbox", 3),
+        ),
         roi_origin: (arr("roi_origin", 0), arr("roi_origin", 1)),
         diff_frames: get("diff_frames", 0),
         source_frame: get("source_frame", 0),
@@ -1079,8 +1276,16 @@ pub fn base64_encode(data: &[u8]) -> String {
         let n = (b0 << 16) | (b1 << 8) | b2;
         out.push(B64[(n >> 18) as usize & 63] as char);
         out.push(B64[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 { B64[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if chunk.len() > 2 { B64[n as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            B64[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            B64[n as usize & 63] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -1096,7 +1301,10 @@ fn base64_decode(s: &str) -> Vec<u8> {
             _ => 0,
         }
     }
-    let bytes: Vec<u8> = s.bytes().filter(|b| *b != b'=' && *b != b'\n' && *b != b'\r').collect();
+    let bytes: Vec<u8> = s
+        .bytes()
+        .filter(|b| *b != b'=' && *b != b'\n' && *b != b'\r')
+        .collect();
     let mut out = Vec::with_capacity(bytes.len() * 3 / 4);
     for chunk in bytes.chunks(4) {
         let n = (val(chunk[0]) as u32) << 18
@@ -1112,4 +1320,33 @@ fn base64_decode(s: &str) -> Vec<u8> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 旧序号位图清理的解析基础：`subtitle_0003.png` 必须能解析出 3。
+    /// 曾经的 bug 是只按 '_' 切分，拿到 "0003.png" 解析失败 → 清理静默跳过，
+    /// 删除字幕后旧图仍留在目录里被误认为本次产物。
+    #[test]
+    fn ocr_stem_index_parses_plain_name() {
+        assert_eq!(ocr_stem_index("subtitle_0003.png"), Some(3));
+        assert_eq!(ocr_stem_index("subtitle_0012.jpg"), Some(12));
+    }
+
+    #[test]
+    fn ocr_stem_index_parses_split_variants() {
+        assert_eq!(ocr_stem_index("subtitle_0004_top.png"), Some(4));
+        assert_eq!(ocr_stem_index("subtitle_0004_bottom.png"), Some(4));
+    }
+
+    /// 非本函数生成的文件必须返回 None，调用方据此跳过（不得误删用户文件）。
+    #[test]
+    fn ocr_stem_index_rejects_foreign_names() {
+        assert_eq!(ocr_stem_index("other_0003.png"), None);
+        assert_eq!(ocr_stem_index("subtitle_abc.png"), None);
+        assert_eq!(ocr_stem_index("esrxp.log"), None);
+        assert_eq!(ocr_stem_index("sample_hardsub.srt"), None);
+    }
 }

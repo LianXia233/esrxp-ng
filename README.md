@@ -38,10 +38,11 @@ esrxp-ng/
 
 ```bash
 # 依赖（Ubuntu/Debian，可换 mirrors.bfsu.edu.cn）
-# 动态链接模式（开发验证）：需系统 FFmpeg dev 包
+# 动态链接模式（开发验证）：需系统 FFmpeg dev 包（任意 6.x/7.x 均可编译，
+#   仅用格式/解码 API；CI 的 lint job 即走此模式）
 # 静态链接模式（发布，零依赖）：cargo build --release --features vendored-ffmpeg
 apt install -y libavformat-dev libavcodec-dev libavutil-dev libswscale-dev \
-    libavfilter-dev libswresample-dev libavdevice-dev libclang-14-dev pkg-config
+    libavfilter-dev libswresample-dev libavdevice-dev libclang-dev pkg-config
 
 export PATH="$HOME/.cargo/bin:$PATH"
 export LIBCLANG_PATH=/usr/lib/llvm-14/lib   # ffmpeg-sys-next bindgen 需要
@@ -49,6 +50,11 @@ export LIBCLANG_PATH=/usr/lib/llvm-14/lib   # ffmpeg-sys-next bindgen 需要
 cd rust-backend
 cargo build --release
 ```
+
+> 版本说明：`Cargo.lock` 锁定 `ffmpeg-next 9.0.0`。
+> - Windows 发布版：BtbN **n9.0** shared 预编译 DLL 随安装包分发
+> - Debian 发布版：`vendored-ffmpeg` 从源码编译 FFmpeg 9.0 并静态链接
+> - 开发态：链接系统 FFmpeg，版本不敏感
 
 ### 命令行抓取
 
@@ -114,6 +120,19 @@ npm run dist:win # Win11 打包：NSIS 安装包 + 便携版（需 Windows 或 C
 
 预览区为独立视口（contain 自适应，图像完整可见），支持滚轮缩放（以光标为锚点）、拖拽平移、双击 1:1、全屏灯箱；「导出效果」模式直接渲染导出成品。参数经「保存为默认参数」落盘为 `esrxp-config.json`，启动时自动套用。帧预览叠加（overlay）与框选选区严格对齐真实字幕（共享 `roi_scale` 统一 ROI 缩放换算，默认配置下不再除零错位）。
 
+## 字幕管理器（.esr 工程）
+
+`.esr` 工程文件保存配置、字幕（含位图与删除标记）与被过滤候选，可反复打开编辑：
+
+| 操作 | 语义 |
+| --- | --- |
+| 移除（Remove） | **软删除**：打 `deleted` 标记，立即从所有产物（SSA / VobSub / SRT / OCR 位图 / timeline）中排除；标记与数据仍留在 `.esr`，可 Recover Filtered 或重新打开工程后恢复 |
+| 彻底清除（Purge） | 物理丢弃所有已标记的字幕，不可恢复 |
+| 恢复（Recover Filtered） | 把被过滤掉的候选重新并入事件列表 |
+
+写产物时统一在 `write_all_outputs` 入口过滤软删除项，各写出函数无需各自判断；位图目录
+会同步清理超出本次编号范围的旧 `subtitle_*.png`，避免残留被误认为本次产物。
+
 ## 运行日志（0.5.0）
 
 日志同时写两条通道，均逐行写入并 flush（进程崩溃、强杀都留得下最后一条线索）：
@@ -133,16 +152,24 @@ npm run dist:win # Win11 打包：NSIS 安装包 + 便携版（需 Windows 或 C
 
 | 层 | 硬件路径 | 回退 |
 | --- | --- | --- |
-| 视频解码 | `av_hwdevice_ctx_create` 探测：NVDEC(CUDA) → D3D11VA(Win) / VAAPI(Linux)，`av_hwframe_transfer_data` 取回 | 软件解码（CPU） |
+| 视频解码 | `av_hwdevice_ctx_create` 探测：NVDEC(CUDA) → D3D11VA(Win) / VAAPI(Linux)，`av_hwframe_transfer_data` 取回 | 软件解码（CPU，默认） |
 | 像素内核 | `CudaKernels`：libloading 动态加载 libcuda.so.1/nvcuda.dll + 内嵌 PTX（sm_50），整数 HSV 与 CPU 逐位一致 | `CpuKernels` 纯 Rust |
 
-GPU 路径在无 NVIDIA 硬件的环境自动回退 CPU；后端日志输出 `decoder_backend` 与内核 `backend_name()` 供确认。CUDA 内核路径按 Win11 打包口径交付，实机验证需 NVIDIA 环境。
+GPU 路径在无 NVIDIA 硬件的环境自动回退 CPU；后端日志输出 `decoder_backend` 供确认。CUDA 内核路径按 Win11 打包口径交付，实机验证需 NVIDIA 环境。
+
+> 视频解码默认走 CPU 软解：0.4.2 起 Windows GNU 构建 + 共享 DLL 组合下 NVDEC/D3D11VA
+> 实测存在堆损坏（0xC0000374）。本工具为离线处理场景，CPU 足够。如需强制启用硬件
+> 探测，设置环境变量 `ESRXP_HWDEC=1`（仅供排查 hw 路径问题）。
 
 ## 验证
 
-- Rust 与 Python 参考实现端到端逐项一致：3/3 字幕，时间轴（0.52–1.52 / 2.00–3.00 / 3.52–4.72）与 bbox 完全一致
-- VobSub RLE 编码同款，.sub 结构一致（大小差 <2% 属边缘像素正常差异）
+- 端到端样张：`sample_hardsub.mp4`（3 条字幕，真值 0.5–1.5 / 2.0–3.0 / 3.5–5.0）抓取结果与真值一致
+- 单元测试：`cargo test --lib` 覆盖 ROI 缩放换算、连通域除噪、mask 覆盖率门控边界、任务 ID 碰撞、产物软删除过滤、位图序号解析
+- 静态检查：CI 强制 `cargo fmt --check` + `cargo clippy --all-targets -- -D warnings`
 - API 全链路（open/preview/rip/job/artifact）curl 验证通过；Electron 无头冒烟截图验证 UI 渲染与完整交互
+
+> 注：早期版本的「Python 参考实现逐项一致」结论已无法复现——`server.py` 参考实现已不在本仓库，
+> 仅保留 `scripts/make_sample_video.py`（样张生成）。如需重新做交叉验证，需先补回参考实现。
 
 ## 已知限制
 

@@ -5,19 +5,26 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct RipConfig {
-    pub frame_skip: i64,           // 影像跳读：每 N 帧取 1 帧
-    pub pixel_difference: i64,     // 像点相差：变化像素数下限
-    pub ignore_change_percent: f64,// 忽略改变 %：变化占比下限
-    pub diff_threshold: i64,       // 单像素变化判定阈值
-    pub gap_frames: i64,           // 字幕分段帧数
-    pub force_merge: bool,         // 强制合并（字幕管理器 Force Merge：相邻同区字幕强制并为一条）
-    pub better_quality: bool,      // 更高质量（Better Quality：SSA 轮廓保留更多细节）
+    pub frame_skip: i64,            // 影像跳读：每 N 帧取 1 帧
+    pub pixel_difference: i64,      // 像点相差：变化像素数下限
+    pub ignore_change_percent: f64, // 忽略改变 %：变化占比下限
+    pub diff_threshold: i64,        // 单像素变化判定阈值
+    pub gap_frames: i64,            // 字幕分段帧数
+    pub force_merge: bool,          // 强制合并（字幕管理器 Force Merge：相邻同区字幕强制并为一条）
+    pub better_quality: bool,       // 更高质量（Better Quality：SSA 轮廓保留更多细节）
 }
 
 impl Default for RipConfig {
     fn default() -> Self {
-        Self { frame_skip: 1, pixel_difference: 20, ignore_change_percent: 0.5,
-               diff_threshold: 24, gap_frames: 5, force_merge: false, better_quality: false }
+        Self {
+            frame_skip: 1,
+            pixel_difference: 20,
+            ignore_change_percent: 0.5,
+            diff_threshold: 24,
+            gap_frames: 5,
+            force_merge: false,
+            better_quality: false,
+        }
     }
 }
 
@@ -53,49 +60,76 @@ pub struct ColorSegment {
 
 impl Default for ColorSegment {
     fn default() -> Self {
-        Self { hue: 0, hue_diff: 10, rgb: (255, 255, 255), rgb_diff: 40,
-               lum_min: 0, lum_max: 255, sat_min: 0, sat_max: 255,
-               enable_hue: false, enable_rgb: true,
-               enable_lum_min: false, enable_lum_max: false,
-               enable_sat_min: false, enable_sat_max: false }
+        Self {
+            hue: 0,
+            hue_diff: 10,
+            rgb: (255, 255, 255),
+            rgb_diff: 40,
+            lum_min: 0,
+            lum_max: 255,
+            sat_min: 0,
+            sat_max: 255,
+            enable_hue: false,
+            enable_rgb: true,
+            enable_lum_min: false,
+            enable_lum_max: false,
+            enable_sat_min: false,
+            enable_sat_max: false,
+        }
     }
 }
 
 impl ColorSegment {
     pub fn enabled(&self) -> bool {
-        self.enable_hue || self.enable_rgb || self.enable_lum_min
-            || self.enable_lum_max || self.enable_sat_min || self.enable_sat_max
+        self.enable_hue
+            || self.enable_rgb
+            || self.enable_lum_min
+            || self.enable_lum_max
+            || self.enable_sat_min
+            || self.enable_sat_max
     }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct FilterConfig {
-    pub method: String,              // "color" | "color_outline"
+    pub method: String, // "color" | "color_outline"
     pub subtitle_color: (u8, u8, u8),
     pub outline_color: (u8, u8, u8),
-    pub pixel_compensate: i64,       // 像点补偿（膨胀次数）
-    pub enable_filter: bool,         // Enable Filter：关掉时仅保留主色过滤
+    pub pixel_compensate: i64,                // 像点补偿（膨胀次数）
+    pub enable_filter: bool,                  // Enable Filter：关掉时仅保留主色过滤
     pub additional_colors: Vec<(u8, u8, u8)>, // Additional Color：附加颜色（自动生成额外颜色段）
     pub segments: std::collections::BTreeMap<String, ColorSegment>,
 }
 
 impl Default for FilterConfig {
     fn default() -> Self {
-        let mut outline = ColorSegment::default();
-        outline.rgb = (0, 0, 0);
-        outline.rgb_diff = 30;
-        let mut final_seg = ColorSegment::default();
-        final_seg.rgb = (255, 255, 255);
-        let mut pass1 = ColorSegment::default();
-        pass1.rgb = (255, 255, 255);
+        let outline = ColorSegment {
+            rgb: (0, 0, 0),
+            rgb_diff: 30,
+            ..Default::default()
+        };
+        let final_seg = ColorSegment {
+            rgb: (255, 255, 255),
+            ..Default::default()
+        };
+        let pass1 = ColorSegment {
+            rgb: (255, 255, 255),
+            ..Default::default()
+        };
         let mut segs = std::collections::BTreeMap::new();
         segs.insert("outline".into(), outline);
         segs.insert("pass1".into(), pass1);
         segs.insert("final".into(), final_seg);
-        Self { method: "color_outline".into(), subtitle_color: (255, 255, 255),
-               outline_color: (0, 0, 0), pixel_compensate: 1, enable_filter: true,
-               additional_colors: vec![], segments: segs }
+        Self {
+            method: "color_outline".into(),
+            subtitle_color: (255, 255, 255),
+            outline_color: (0, 0, 0),
+            pixel_compensate: 1,
+            enable_filter: true,
+            additional_colors: vec![],
+            segments: segs,
+        }
     }
 }
 
@@ -112,8 +146,14 @@ pub struct PostprocessConfig {
 
 impl Default for PostprocessConfig {
     fn default() -> Self {
-        Self { single_dot: true, single_line: true, large_block: 0,
-               touch_edge: false, pass_center: true, center_tolerance: 0.12 }
+        Self {
+            single_dot: true,
+            single_line: true,
+            large_block: 0,
+            touch_edge: false,
+            pass_center: true,
+            center_tolerance: 0.12,
+        }
     }
 }
 
@@ -125,19 +165,27 @@ pub struct StyleConfig {
     pub outline_width: i64,
     pub shadow_depth: i64,
     pub primary_color: String,
-    pub secondary_color: String,   // Subtitle Style: Secondary
+    pub secondary_color: String, // Subtitle Style: Secondary
     pub outline_color_ssa: String,
-    pub shadow_color: String,      // Subtitle Style: Shadow
-    pub font_name: String,         // Select Font
-    pub no_default_style: bool,    // No Default Subtitle Style
+    pub shadow_color: String,   // Subtitle Style: Shadow
+    pub font_name: String,      // Select Font
+    pub no_default_style: bool, // No Default Subtitle Style
 }
 
 impl Default for StyleConfig {
     fn default() -> Self {
-        Self { unicode: true, time_shift_10ms: 0, outline_width: 1, shadow_depth: 0,
-               primary_color: "&H00FFFFFF&".into(), secondary_color: "&H000000FF&".into(),
-               outline_color_ssa: "&H00000000&".into(), shadow_color: "&H00000000&".into(),
-               font_name: "Arial".into(), no_default_style: false }
+        Self {
+            unicode: true,
+            time_shift_10ms: 0,
+            outline_width: 1,
+            shadow_depth: 0,
+            primary_color: "&H00FFFFFF&".into(),
+            secondary_color: "&H000000FF&".into(),
+            outline_color_ssa: "&H00000000&".into(),
+            shadow_color: "&H00000000&".into(),
+            font_name: "Arial".into(),
+            no_default_style: false,
+        }
     }
 }
 
@@ -149,46 +197,65 @@ pub struct OcrConfig {
     pub scale: f64,               // Scale Subtitle：缩放比例
     pub divid_into_2_lines: bool, // Divid 2 lines：两行字幕拆成上下两张
     // —— 渲染画质（决定「是否清晰」的关键） ——
-    pub color_mode: String,       // gray(默认,前景/背景两色平滑混合) / binary(旧二值硬边) / color(保留原视频色)
-    pub antialias: bool,          // 边缘抗锯齿：mask 覆盖率重建，关闭即回到硬边
-    pub supersample: i64,         // 抗锯齿采样数 N（每像素 N×N 次采样，1-4）
-    pub stroke_dilate: i64,       // 笔画加粗：覆盖率膨胀半径（输出像素 0-4，0=不加粗）
-    pub coverage_gamma: f64,      // 覆盖率先验：<1 笔画更实更黑，>1 收细变淡（0.3-2.0）
-    pub binary_threshold: f64,    // 二值阈值：binary 模式下覆盖率 ≥ 该值判为笔画（0.05-0.95，越大笔画越细）
-    pub despeckle_min_area: i64,  // 渲染前除噪：移除面积 ≤ 该值的孤立噪点簇（0=不除噪；默认 4 去掉椒盐噪声）
-    pub text_color: String,       // 前景（文字）色 #RRGGBB
-    pub bg_color: String,         // 背景色 #RRGGBB
+    pub color_mode: String, // gray(默认,前景/背景两色平滑混合) / binary(旧二值硬边) / color(保留原视频色)
+    pub antialias: bool,    // 边缘抗锯齿：mask 覆盖率重建，关闭即回到硬边
+    pub supersample: i64,   // 抗锯齿采样数 N（每像素 N×N 次采样，1-4）
+    pub stroke_dilate: i64, // 笔画加粗：覆盖率膨胀半径（输出像素 0-4，0=不加粗）
+    pub coverage_gamma: f64, // 覆盖率先验：<1 笔画更实更黑，>1 收细变淡（0.3-2.0）
+    pub binary_threshold: f64, // 二值阈值：binary 模式下覆盖率 ≥ 该值判为笔画（0.05-0.95，越大笔画越细）
+    pub despeckle_min_area: i64, // 渲染前除噪：移除面积 ≤ 该值的孤立噪点簇（0=不除噪；默认 4 去掉椒盐噪声）
+    pub text_color: String,      // 前景（文字）色 #RRGGBB
+    pub bg_color: String,        // 背景色 #RRGGBB
     // —— 输出格式与质量 ——
-    pub format: String,           // png / jpg / bmp
-    pub quality: i64,             // JPG 质量 1-100（png/bmp 为无损，忽略该项）
-    pub scale_filter: String,     // 重采样滤镜：nearest / triangle / catmullrom / lanczos3
-    pub max_width: i64,           // 输出最大宽度限制（0 = 不限）
+    pub format: String,       // png / jpg / bmp
+    pub quality: i64,         // JPG 质量 1-100（png/bmp 为无损，忽略该项）
+    pub scale_filter: String, // 重采样滤镜：nearest / triangle / catmullrom / lanczos3
+    pub max_width: i64,       // 输出最大宽度限制（0 = 不限）
     // —— 后处理 ——
-    pub padding: i64,             // 四周留边（输出像素）
-    pub crop_top: i64,            // 上边裁剪（输出像素）
-    pub crop_bottom: i64,         // 下边裁剪
-    pub crop_left: i64,           // 左边裁剪
-    pub crop_right: i64,          // 右边裁剪
-    pub rotate: i64,              // 旋转：0 / 90 / 180 / 270
-    pub flip_h: bool,             // 水平镜像
-    pub flip_v: bool,             // 垂直镜像
-    pub brightness: i64,          // 亮度：-100..100
-    pub contrast: i64,            // 对比度：-100..100
-    pub grayscale: bool,          // 转为灰度图
+    pub padding: i64,     // 四周留边（输出像素）
+    pub crop_top: i64,    // 上边裁剪（输出像素）
+    pub crop_bottom: i64, // 下边裁剪
+    pub crop_left: i64,   // 左边裁剪
+    pub crop_right: i64,  // 右边裁剪
+    pub rotate: i64,      // 旋转：0 / 90 / 180 / 270
+    pub flip_h: bool,     // 水平镜像
+    pub flip_v: bool,     // 垂直镜像
+    pub brightness: i64,  // 亮度：-100..100
+    pub contrast: i64,    // 对比度：-100..100
+    pub grayscale: bool,  // 转为灰度图
 }
 
 impl Default for OcrConfig {
     fn default() -> Self {
-        Self { per_image: 1, scale: 1.0, divid_into_2_lines: false,
-               color_mode: "gray".into(), antialias: true, supersample: 3,
-               stroke_dilate: 0, coverage_gamma: 0.85, binary_threshold: 0.5,
-               despeckle_min_area: 4,
-               text_color: "#000000".into(), bg_color: "#FFFFFF".into(),
-               format: "png".into(), quality: 95,
-               scale_filter: "lanczos3".into(), max_width: 0,
-               padding: 0, crop_top: 0, crop_bottom: 0, crop_left: 0, crop_right: 0,
-               rotate: 0, flip_h: false, flip_v: false,
-               brightness: 0, contrast: 0, grayscale: false }
+        Self {
+            per_image: 1,
+            scale: 1.0,
+            divid_into_2_lines: false,
+            color_mode: "gray".into(),
+            antialias: true,
+            supersample: 3,
+            stroke_dilate: 0,
+            coverage_gamma: 0.85,
+            binary_threshold: 0.5,
+            despeckle_min_area: 4,
+            text_color: "#000000".into(),
+            bg_color: "#FFFFFF".into(),
+            format: "png".into(),
+            quality: 95,
+            scale_filter: "lanczos3".into(),
+            max_width: 0,
+            padding: 0,
+            crop_top: 0,
+            crop_bottom: 0,
+            crop_left: 0,
+            crop_right: 0,
+            rotate: 0,
+            flip_h: false,
+            flip_v: false,
+            brightness: 0,
+            contrast: 0,
+            grayscale: false,
+        }
     }
 }
 
@@ -198,8 +265,8 @@ pub struct OutputConfig {
     pub ssa: bool,
     pub vobsub: bool,
     pub ocr_png: bool,
-    pub srt: bool,                 // SRT：纯时间轴（不含文本，定位字幕图片出现区间）
-    pub srt_bitmap: bool,          // SubRip with bitmap：SRT 时间轴 + 每字幕独立位图
+    pub srt: bool,        // SRT：纯时间轴（不含文本，定位字幕图片出现区间）
+    pub srt_bitmap: bool, // SubRip with bitmap：SRT 时间轴 + 每字幕独立位图
     pub json_timeline: bool,
     pub ocr: OcrConfig,
     pub max_subtitle_width: i64,
@@ -208,10 +275,17 @@ pub struct OutputConfig {
 
 impl Default for OutputConfig {
     fn default() -> Self {
-        Self { ssa: true, vobsub: true, ocr_png: true, srt: true, srt_bitmap: false,
-               json_timeline: true,
-               ocr: OcrConfig::default(),
-               max_subtitle_width: 720, fps: None }
+        Self {
+            ssa: true,
+            vobsub: true,
+            ocr_png: true,
+            srt: true,
+            srt_bitmap: false,
+            json_timeline: true,
+            ocr: OcrConfig::default(),
+            max_subtitle_width: 720,
+            fps: None,
+        }
     }
 }
 
@@ -220,15 +294,20 @@ impl Default for OutputConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct PreviewConfig {
-    pub scale_video: f64,      // Scale Video：整帧缩放（乘入 region.scale）
-    pub sharpen_video: bool,   // Sharpen Video：整帧锐化（并入 region.sharpen）
-    pub white_background: bool,// White Background：预览/输出背景置白
-    pub slow_speed: f64,       // Slow Speed：预览慢速（前端逐帧步进倍率）
+    pub scale_video: f64,       // Scale Video：整帧缩放（乘入 region.scale）
+    pub sharpen_video: bool,    // Sharpen Video：整帧锐化（并入 region.sharpen）
+    pub white_background: bool, // White Background：预览/输出背景置白
+    pub slow_speed: f64,        // Slow Speed：预览慢速（前端逐帧步进倍率）
 }
 
 impl Default for PreviewConfig {
     fn default() -> Self {
-        Self { scale_video: 1.0, sharpen_video: false, white_background: false, slow_speed: 1.0 }
+        Self {
+            scale_video: 1.0,
+            sharpen_video: false,
+            white_background: false,
+            slow_speed: 1.0,
+        }
     }
 }
 

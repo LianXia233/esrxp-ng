@@ -33,10 +33,17 @@ pub fn rgb_to_hsv(r: u8, g: u8, b: u8) -> (i64, i64, i64) {
 /// 计算一段判据的命中 mask（bool，w*h）。
 pub fn segment_mask(rgb: &[u8], w: usize, h: usize, seg: &ColorSegment) -> Vec<bool> {
     let mut mask = vec![true; w * h];
-    let need_hsv = seg.enable_hue || seg.enable_lum_min || seg.enable_lum_max
-        || seg.enable_sat_min || seg.enable_sat_max;
+    let need_hsv = seg.enable_hue
+        || seg.enable_lum_min
+        || seg.enable_lum_max
+        || seg.enable_sat_min
+        || seg.enable_sat_max;
     let hsv: Option<Vec<(i64, i64, i64)>> = if need_hsv {
-        Some(rgb.chunks_exact(3).map(|p| rgb_to_hsv(p[0], p[1], p[2])).collect())
+        Some(
+            rgb.chunks_exact(3)
+                .map(|p| rgb_to_hsv(p[0], p[1], p[2]))
+                .collect(),
+        )
     } else {
         None
     };
@@ -83,11 +90,25 @@ pub fn active_segments_pub(cfg: &FilterConfig) -> Vec<ColorSegment> {
     let default = ColorSegment::default();
     if cfg.method == "color_outline" {
         vec![
-            cfg.segments.get("outline").cloned().unwrap_or_else(|| default.clone()),
-            cfg.segments.get("final").cloned().unwrap_or_else(|| default.clone()),
+            cfg.segments
+                .get("outline")
+                .cloned()
+                .unwrap_or_else(|| default.clone()),
+            cfg.segments
+                .get("final")
+                .cloned()
+                .unwrap_or_else(|| default.clone()),
         ]
-    } else if cfg.segments.get("pass1").map(|s| s.enabled()).unwrap_or(false)
-        && !cfg.segments.get("final").map(|s| s.enabled()).unwrap_or(false)
+    } else if cfg
+        .segments
+        .get("pass1")
+        .map(|s| s.enabled())
+        .unwrap_or(false)
+        && !cfg
+            .segments
+            .get("final")
+            .map(|s| s.enabled())
+            .unwrap_or(false)
     {
         vec![cfg.segments.get("pass1").cloned().unwrap_or(default)]
     } else {
@@ -141,7 +162,8 @@ pub fn frame_diff_cpu(prev: &[u8], cur: &[u8], threshold: i64) -> (i64, f64, Vec
     for i in 0..n {
         let p = &prev[i * 3..i * 3 + 3];
         let c = &cur[i * 3..i * 3 + 3];
-        let d = (p[0] as i64 - c[0] as i64).abs()
+        let d = (p[0] as i64 - c[0] as i64)
+            .abs()
             .max((p[1] as i64 - c[1] as i64).abs())
             .max((p[2] as i64 - c[2] as i64).abs());
         if d > threshold {
@@ -149,7 +171,11 @@ pub fn frame_diff_cpu(prev: &[u8], cur: &[u8], threshold: i64) -> (i64, f64, Vec
             cmask[i] = true;
         }
     }
-    let ratio = if n > 0 { changed as f64 / n as f64 } else { 0.0 };
+    let ratio = if n > 0 {
+        changed as f64 / n as f64
+    } else {
+        0.0
+    };
     (changed, ratio, cmask)
 }
 
@@ -178,8 +204,12 @@ pub fn scale_nearest_cpu(rgb: &[u8], w: usize, h: usize, factor: f64) -> (Vec<u8
 }
 
 /// 自动估计字幕色与描边色（亮度分位法）。
-pub fn auto_detect_colors(rgb: &[u8], diff_mask: &[bool], _w: usize, _h: usize)
-    -> ((u8, u8, u8), (u8, u8, u8)) {
+pub fn auto_detect_colors(
+    rgb: &[u8],
+    diff_mask: &[bool],
+    _w: usize,
+    _h: usize,
+) -> ((u8, u8, u8), (u8, u8, u8)) {
     let mut pts: Vec<(u32, [u8; 3])> = Vec::new();
     for (i, px) in rgb.chunks_exact(3).enumerate() {
         if i < diff_mask.len() && diff_mask[i] {
@@ -217,10 +247,60 @@ pub fn colors_plausible(main: (u8, u8, u8), outline: (u8, u8, u8)) -> bool {
 }
 
 /// mask 合理性：非空且覆盖 < 30%。
+/// 用浮点比较而非 `count < area * 30 / 100`：整数除法在 ROI 很小时会把阈值截断到 0
+/// （如 area=3 时阈值 0，任何非空 mask 都判为不合理），且 30% 整恰好被误判为不合理。
 pub fn mask_plausible(mask: &[u8], area: usize) -> bool {
-    let nonempty = mask.iter().any(|v| *v > 0);
-    if !nonempty {
+    let count = mask.iter().filter(|v| **v > 0).count();
+    if count == 0 || area == 0 {
         return false;
     }
-    mask.iter().filter(|v| **v > 0).count() < area * 30 / 100
+    (count as f64) / (area as f64) < 0.30
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mask_of(n: usize, total: usize) -> Vec<u8> {
+        let mut m = vec![0u8; total];
+        for v in m.iter_mut().take(n) {
+            *v = 255;
+        }
+        m
+    }
+
+    /// 小 ROI 不得因整数截断把「本应合理」的 mask 判为不合理。
+    /// 原实现 `count < area*30/100` 在 area=4 时阈值退化为 1，
+    /// 1 像素前景（1 < 1 为假）被误拒，而 1/4 = 25% 本应合理。
+    #[test]
+    fn mask_plausible_small_area_not_truncated() {
+        assert!(mask_plausible(&mask_of(1, 4), 4), "1/4 = 25% < 30% 应合理");
+    }
+
+    /// 面积很小时按真实比例判定：1/3 > 30% 故不合理，但 1/4 = 25% 应合理。
+    #[test]
+    fn mask_plausible_uses_real_ratio() {
+        assert!(mask_plausible(&mask_of(1, 4), 4), "1/4 = 25% < 30% 应合理");
+        assert!(
+            !mask_plausible(&mask_of(1, 3), 3),
+            "1/3 ≈ 33.3% > 30% 应不合理"
+        );
+    }
+
+    #[test]
+    fn mask_plausible_rejects_empty_and_full() {
+        assert!(!mask_plausible(&[0u8; 16], 16), "全空应不合理");
+        assert!(!mask_plausible(&[255u8; 16], 16), "100% 覆盖应不合理");
+        assert!(!mask_plausible(&[255u8; 4], 0), "area=0 应不合理");
+    }
+
+    /// 30% 临界：整数实现会误判，浮点实现按注释语义「< 30%」处理。
+    #[test]
+    fn mask_plausible_boundary_is_strict() {
+        assert!(
+            !mask_plausible(&mask_of(30, 100), 100),
+            "恰好 30% 不满足 < 30%"
+        );
+        assert!(mask_plausible(&mask_of(29, 100), 100), "29% 应合理");
+    }
 }

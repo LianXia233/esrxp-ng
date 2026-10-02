@@ -36,18 +36,6 @@ pub fn kernels() -> &'static dyn FrameKernels {
     b.as_ref()
 }
 
-/// 当前后端名（日志/UI 展示）。
-pub fn backend_name() -> &'static str {
-    static NAME: OnceLock<&'static str> = OnceLock::new();
-    *NAME.get_or_init(|| {
-        if CudaKernels::probe().is_some() {
-            "CUDA"
-        } else {
-            "CPU"
-        }
-    })
-}
-
 // ================================================================ CPU 实现
 pub struct CpuKernels;
 
@@ -65,15 +53,14 @@ impl FrameKernels for CpuKernels {
 
 // ================================================================ CUDA 实现
 pub struct CudaKernels {
-    _lib: Library,              // 保持驱动句柄存活
+    _lib: Library, // 保持驱动句柄存活
     ctx: CUcontext,
     mod_: CUmodule,
     f_filter: CUfunction,
     f_dilate: CUfunction,
     f_diff: CUfunction,
     f_scale: CUfunction,
-    segbuf: CUdeviceptr,        // 段参数 device 内存（16 u32 * 3）
-    segsize: usize,
+    segbuf: CUdeviceptr, // 段参数 device 内存（16 u32 * 3）
 }
 
 // CUDA 句柄类型（driver API 指针）
@@ -88,7 +75,8 @@ impl CudaKernels {
     pub fn probe() -> Option<CudaKernels> {
         let lib = unsafe { Library::new(CUDA_SONAME).ok()? };
         // 逐符号绑定，缺任一即放弃
-        let cu_init: Symbol<unsafe extern "C" fn(u32) -> i32> = unsafe { lib.get(b"cuInit\0").ok()? };
+        let cu_init: Symbol<unsafe extern "C" fn(u32) -> i32> =
+            unsafe { lib.get(b"cuInit\0").ok()? };
         let cu_dev_get_count: Symbol<unsafe extern "C" fn(*mut i32) -> i32> =
             unsafe { lib.get(b"cuDeviceGetCount\0").ok()? };
         let cu_dev_get: Symbol<unsafe extern "C" fn(*mut i32, i32) -> i32> =
@@ -97,10 +85,18 @@ impl CudaKernels {
             unsafe { lib.get(b"cuCtxCreate_v2\0").ok()? };
         let cu_ctx_destroy: Symbol<unsafe extern "C" fn(CUcontext) -> i32> =
             unsafe { lib.get(b"cuCtxDestroy\0").ok()? };
-        let cu_module_load: Symbol<unsafe extern "C" fn(*mut CUmodule, *const c_void, u32, *mut u32, *mut *mut c_void) -> i32> =
-            unsafe { lib.get(b"cuModuleLoadDataEx\0").ok()? };
-        let cu_module_func: Symbol<unsafe extern "C" fn(CUmodule, *mut CUfunction, *const libc::c_char) -> i32> =
-            unsafe { lib.get(b"cuModuleGetFunction\0").ok()? };
+        let cu_module_load: Symbol<
+            unsafe extern "C" fn(
+                *mut CUmodule,
+                *const c_void,
+                u32,
+                *mut u32,
+                *mut *mut c_void,
+            ) -> i32,
+        > = unsafe { lib.get(b"cuModuleLoadDataEx\0").ok()? };
+        let cu_module_func: Symbol<
+            unsafe extern "C" fn(CUmodule, *mut CUfunction, *const libc::c_char) -> i32,
+        > = unsafe { lib.get(b"cuModuleGetFunction\0").ok()? };
         let cu_mem_alloc: Symbol<unsafe extern "C" fn(*mut CUdeviceptr, usize) -> i32> =
             unsafe { lib.get(b"cuMemAlloc_v2\0").ok()? };
         let _ = &cu_ctx_destroy;
@@ -125,7 +121,16 @@ impl CudaKernels {
         let mut module: CUmodule = std::ptr::null_mut();
         let mut opts: [u32; 1] = [0];
         let mut optvals: [*mut c_void; 1] = [std::ptr::null_mut()];
-        if unsafe { cu_module_load(&mut module, PTX.as_ptr() as *const c_void, opts[0], opts.as_mut_ptr(), optvals.as_mut_ptr()) } != 0 {
+        if unsafe {
+            cu_module_load(
+                &mut module,
+                PTX.as_ptr() as *const c_void,
+                opts[0],
+                opts.as_mut_ptr(),
+                optvals.as_mut_ptr(),
+            )
+        } != 0
+        {
             let _ = unsafe { cu_ctx_destroy(ctx) };
             return None;
         }
@@ -150,8 +155,14 @@ impl CudaKernels {
         }
 
         Some(CudaKernels {
-            _lib: lib, ctx, mod_: module, f_filter, f_dilate, f_diff, f_scale,
-            segbuf, segsize: 16 * 4 * 3,
+            _lib: lib,
+            ctx,
+            mod_: module,
+            f_filter,
+            f_dilate,
+            f_diff,
+            f_scale,
+            segbuf,
         })
     }
 
@@ -161,7 +172,7 @@ impl CudaKernels {
         let segs: Vec<crate::config::ColorSegment> = crate::filter::active_segments_pub(cfg);
         for (i, s) in segs.iter().enumerate().take(3) {
             let base = i * 16;
-            seg[base + 0] = s.enable_rgb as u32;
+            seg[base] = s.enable_rgb as u32;
             seg[base + 1] = s.rgb.0 as u32;
             seg[base + 2] = s.rgb.1 as u32;
             seg[base + 3] = s.rgb.2 as u32;
@@ -178,7 +189,12 @@ impl CudaKernels {
             seg[base + 14] = s.enable_sat_max as u32;
             seg[base + 15] = s.sat_max as u32;
         }
-        match unsafe { self._lib.get::<unsafe extern "C" fn(CUdeviceptr, *const c_void, usize) -> i32>(b"cuMemcpyHtoD_v2\0") } {
+        match unsafe {
+            self._lib
+                .get::<unsafe extern "C" fn(CUdeviceptr, *const c_void, usize) -> i32>(
+                    b"cuMemcpyHtoD_v2\0",
+                )
+        } {
             Ok(f) => (unsafe { f(self.segbuf, seg.as_ptr() as *const c_void, seg.len() * 4) }) == 0,
             Err(_) => false,
         }
@@ -189,18 +205,47 @@ impl CudaKernels {
         // cuLaunchKernel 的 kernelParams 是「指向每个参数值」的指针数组：
         // 每个元素必须指向参数的存储位置（这里指向 args 切片里的 u64），
         // 而非把参数值本身强转成指针（那样驱动会按宿主地址解引用 → 崩溃/乱码）。
-        let mut params: Vec<*mut c_void> = args.iter().map(|a| a as *const u64 as *mut c_void).collect();
-        match unsafe { self._lib.get::<unsafe extern "C" fn(
-                CUfunction, u32, u32, u32, u32, u32, u32, u32, *mut CUdeviceptr, *mut *mut c_void) -> i32>(b"cuLaunchKernel\0") } {
+        let mut params: Vec<*mut c_void> = args
+            .iter()
+            .map(|a| a as *const u64 as *mut c_void)
+            .collect();
+        match unsafe {
+            self._lib.get::<unsafe extern "C" fn(
+                CUfunction,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                *mut CUdeviceptr,
+                *mut *mut c_void,
+            ) -> i32>(b"cuLaunchKernel\0")
+        } {
             Ok(launch) => unsafe {
-                launch(f, bx, 1, 1, block, 1, 1, 0, std::ptr::null_mut(), params.as_mut_ptr()) == 0
+                launch(
+                    f,
+                    bx,
+                    1,
+                    1,
+                    block,
+                    1,
+                    1,
+                    0,
+                    std::ptr::null_mut(),
+                    params.as_mut_ptr(),
+                ) == 0
             },
             Err(_) => false,
         }
     }
 
     fn ctx_sync(&self) -> bool {
-        match unsafe { self._lib.get::<unsafe extern "C" fn(CUcontext) -> i32>(b"cuCtxSynchronize\0") } {
+        match unsafe {
+            self._lib
+                .get::<unsafe extern "C" fn(CUcontext) -> i32>(b"cuCtxSynchronize\0")
+        } {
             Ok(f) => (unsafe { f(self.ctx) }) == 0,
             Err(_) => false,
         }
@@ -214,13 +259,22 @@ unsafe impl Sync for CudaKernels {}
 impl Drop for CudaKernels {
     fn drop(&mut self) {
         unsafe {
-            if let Ok(f) = self._lib.get::<unsafe extern "C" fn(CUdeviceptr) -> i32>(b"cuMemFree_v2\0") {
+            if let Ok(f) = self
+                ._lib
+                .get::<unsafe extern "C" fn(CUdeviceptr) -> i32>(b"cuMemFree_v2\0")
+            {
                 f(self.segbuf);
             }
-            if let Ok(f) = self._lib.get::<unsafe extern "C" fn(CUmodule) -> i32>(b"cuModuleUnload\0") {
+            if let Ok(f) = self
+                ._lib
+                .get::<unsafe extern "C" fn(CUmodule) -> i32>(b"cuModuleUnload\0")
+            {
                 f(self.mod_);
             }
-            if let Ok(f) = self._lib.get::<unsafe extern "C" fn(CUcontext) -> i32>(b"cuCtxDestroy\0") {
+            if let Ok(f) = self
+                ._lib
+                .get::<unsafe extern "C" fn(CUcontext) -> i32>(b"cuCtxDestroy\0")
+            {
                 f(self.ctx);
             }
         }
@@ -240,32 +294,61 @@ impl FrameKernels for CudaKernels {
             return crate::filter::filter_frame_cpu(rgb, w, h, cfg);
         }
         unsafe {
-            let alloc = match self._lib.get::<unsafe extern "C" fn(*mut CUdeviceptr, usize) -> i32>(b"cuMemAlloc_v2\0") {
-                Ok(f) => f, Err(_) => return crate::filter::filter_frame_cpu(rgb, w, h, cfg),
+            let alloc = match self
+                ._lib
+                .get::<unsafe extern "C" fn(*mut CUdeviceptr, usize) -> i32>(b"cuMemAlloc_v2\0")
+            {
+                Ok(f) => f,
+                Err(_) => return crate::filter::filter_frame_cpu(rgb, w, h, cfg),
             };
-            let h2d = match self._lib.get::<unsafe extern "C" fn(CUdeviceptr, *const c_void, usize) -> i32>(b"cuMemcpyHtoD_v2\0") {
-                Ok(f) => f, Err(_) => return crate::filter::filter_frame_cpu(rgb, w, h, cfg),
+            let h2d = match self
+                ._lib
+                .get::<unsafe extern "C" fn(CUdeviceptr, *const c_void, usize) -> i32>(
+                    b"cuMemcpyHtoD_v2\0",
+                ) {
+                Ok(f) => f,
+                Err(_) => return crate::filter::filter_frame_cpu(rgb, w, h, cfg),
             };
-            let d2h = match self._lib.get::<unsafe extern "C" fn(*mut c_void, CUdeviceptr, usize) -> i32>(b"cuMemcpyDtoH_v2\0") {
-                Ok(f) => f, Err(_) => return crate::filter::filter_frame_cpu(rgb, w, h, cfg),
+            let d2h = match self
+                ._lib
+                .get::<unsafe extern "C" fn(*mut c_void, CUdeviceptr, usize) -> i32>(
+                    b"cuMemcpyDtoH_v2\0",
+                ) {
+                Ok(f) => f,
+                Err(_) => return crate::filter::filter_frame_cpu(rgb, w, h, cfg),
             };
-            let free = match self._lib.get::<unsafe extern "C" fn(CUdeviceptr) -> i32>(b"cuMemFree_v2\0") {
-                Ok(f) => f, Err(_) => return crate::filter::filter_frame_cpu(rgb, w, h, cfg),
+            let free = match self
+                ._lib
+                .get::<unsafe extern "C" fn(CUdeviceptr) -> i32>(b"cuMemFree_v2\0")
+            {
+                Ok(f) => f,
+                Err(_) => return crate::filter::filter_frame_cpu(rgb, w, h, cfg),
             };
 
             let mut drgb: CUdeviceptr = 0;
             let mut dmask: CUdeviceptr = 0;
             let mut dmask2: CUdeviceptr = 0;
-            if alloc(&mut drgb, rgb.len()) != 0 || alloc(&mut dmask, n) != 0 || alloc(&mut dmask2, n) != 0 {
-                let _ = free(drgb); let _ = free(dmask); let _ = free(dmask2);
+            if alloc(&mut drgb, rgb.len()) != 0
+                || alloc(&mut dmask, n) != 0
+                || alloc(&mut dmask2, n) != 0
+            {
+                let _ = free(drgb);
+                let _ = free(dmask);
+                let _ = free(dmask2);
                 return crate::filter::filter_frame_cpu(rgb, w, h, cfg);
             }
             if h2d(drgb, rgb.as_ptr() as *const c_void, rgb.len()) != 0 {
-                let _ = free(drgb); let _ = free(dmask); let _ = free(dmask2);
+                let _ = free(drgb);
+                let _ = free(dmask);
+                let _ = free(dmask2);
                 return crate::filter::filter_frame_cpu(rgb, w, h, cfg);
             }
-            let ok = self.launch(self.f_filter, n, 256, &[drgb, dmask, self.segbuf, w as u64, h as u64, n as u64])
-                && self.ctx_sync();
+            let ok = self.launch(
+                self.f_filter,
+                n,
+                256,
+                &[drgb, dmask, self.segbuf, w as u64, h as u64, n as u64],
+            ) && self.ctx_sync();
             let mut cur = if ok { dmask } else { dmask2 };
             // 膨胀 n 次（pixel_compensate）
             let iters = cfg.pixel_compensate.max(0);
@@ -285,7 +368,9 @@ impl FrameKernels for CudaKernels {
             if d2h(out.as_mut_ptr() as *mut c_void, cur, n) != 0 {
                 out = crate::filter::filter_frame_cpu(rgb, w, h, cfg);
             }
-            let _ = free(drgb); let _ = free(dmask); let _ = free(dmask2);
+            let _ = free(drgb);
+            let _ = free(dmask);
+            let _ = free(dmask2);
             out
         }
     }
@@ -296,53 +381,94 @@ impl FrameKernels for CudaKernels {
             return (0, 0.0, vec![]);
         }
         unsafe {
-            let alloc = match self._lib.get::<unsafe extern "C" fn(*mut CUdeviceptr, usize) -> i32>(b"cuMemAlloc_v2\0") {
-                Ok(f) => f, Err(_) => return crate::filter::frame_diff_cpu(prev, cur, threshold),
+            let alloc = match self
+                ._lib
+                .get::<unsafe extern "C" fn(*mut CUdeviceptr, usize) -> i32>(b"cuMemAlloc_v2\0")
+            {
+                Ok(f) => f,
+                Err(_) => return crate::filter::frame_diff_cpu(prev, cur, threshold),
             };
-            let h2d = match self._lib.get::<unsafe extern "C" fn(CUdeviceptr, *const c_void, usize) -> i32>(b"cuMemcpyHtoD_v2\0") {
-                Ok(f) => f, Err(_) => return crate::filter::frame_diff_cpu(prev, cur, threshold),
+            let h2d = match self
+                ._lib
+                .get::<unsafe extern "C" fn(CUdeviceptr, *const c_void, usize) -> i32>(
+                    b"cuMemcpyHtoD_v2\0",
+                ) {
+                Ok(f) => f,
+                Err(_) => return crate::filter::frame_diff_cpu(prev, cur, threshold),
             };
-            let d2h = match self._lib.get::<unsafe extern "C" fn(*mut c_void, CUdeviceptr, usize) -> i32>(b"cuMemcpyDtoH_v2\0") {
-                Ok(f) => f, Err(_) => return crate::filter::frame_diff_cpu(prev, cur, threshold),
+            let d2h = match self
+                ._lib
+                .get::<unsafe extern "C" fn(*mut c_void, CUdeviceptr, usize) -> i32>(
+                    b"cuMemcpyDtoH_v2\0",
+                ) {
+                Ok(f) => f,
+                Err(_) => return crate::filter::frame_diff_cpu(prev, cur, threshold),
             };
-            let free = match self._lib.get::<unsafe extern "C" fn(CUdeviceptr) -> i32>(b"cuMemFree_v2\0") {
-                Ok(f) => f, Err(_) => return crate::filter::frame_diff_cpu(prev, cur, threshold),
+            let free = match self
+                ._lib
+                .get::<unsafe extern "C" fn(CUdeviceptr) -> i32>(b"cuMemFree_v2\0")
+            {
+                Ok(f) => f,
+                Err(_) => return crate::filter::frame_diff_cpu(prev, cur, threshold),
             };
 
             let mut dp: CUdeviceptr = 0;
             let mut dc: CUdeviceptr = 0;
             let mut dout: CUdeviceptr = 0;
             let mut dcount: CUdeviceptr = 0;
-            if alloc(&mut dp, prev.len()) != 0 || alloc(&mut dc, cur.len()) != 0
-                || alloc(&mut dout, n) != 0 || alloc(&mut dcount, 4) != 0 {
-                let _ = free(dp); let _ = free(dc); let _ = free(dout); let _ = free(dcount);
+            if alloc(&mut dp, prev.len()) != 0
+                || alloc(&mut dc, cur.len()) != 0
+                || alloc(&mut dout, n) != 0
+                || alloc(&mut dcount, 4) != 0
+            {
+                let _ = free(dp);
+                let _ = free(dc);
+                let _ = free(dout);
+                let _ = free(dcount);
                 return crate::filter::frame_diff_cpu(prev, cur, threshold);
             }
             if h2d(dp, prev.as_ptr() as *const c_void, prev.len()) != 0
-                || h2d(dc, cur.as_ptr() as *const c_void, cur.len()) != 0 {
-                let _ = free(dp); let _ = free(dc); let _ = free(dout); let _ = free(dcount);
+                || h2d(dc, cur.as_ptr() as *const c_void, cur.len()) != 0
+            {
+                let _ = free(dp);
+                let _ = free(dc);
+                let _ = free(dout);
+                let _ = free(dcount);
                 return crate::filter::frame_diff_cpu(prev, cur, threshold);
             }
             // 计数清零
             let zero = [0u32];
             if h2d(dcount, zero.as_ptr() as *const c_void, 4) != 0 {
-                let _ = free(dp); let _ = free(dc); let _ = free(dout); let _ = free(dcount);
+                let _ = free(dp);
+                let _ = free(dc);
+                let _ = free(dout);
+                let _ = free(dcount);
                 return crate::filter::frame_diff_cpu(prev, cur, threshold);
             }
-            let ok = self.launch(self.f_diff, n, 256,
-                    &[dp, dc, dout, dcount, n as u64, threshold as u64])
-                && self.ctx_sync();
+            let ok = self.launch(
+                self.f_diff,
+                n,
+                256,
+                &[dp, dc, dout, dcount, n as u64, threshold as u64],
+            ) && self.ctx_sync();
             let mut out_u8 = vec![0u8; n];
             let mut cnt = [0u32];
             let ok = ok
                 && d2h(out_u8.as_mut_ptr() as *mut c_void, dout, n) == 0
                 && d2h(cnt.as_mut_ptr() as *mut c_void, dcount, 4) == 0;
-            let _ = free(dp); let _ = free(dc); let _ = free(dout); let _ = free(dcount);
+            let _ = free(dp);
+            let _ = free(dc);
+            let _ = free(dout);
+            let _ = free(dcount);
             if !ok {
                 return crate::filter::frame_diff_cpu(prev, cur, threshold);
             }
             let changed = cnt[0] as i64;
-            let ratio = if n > 0 { changed as f64 / n as f64 } else { 0.0 };
+            let ratio = if n > 0 {
+                changed as f64 / n as f64
+            } else {
+                0.0
+            };
             let mask: Vec<bool> = out_u8.iter().map(|v| *v > 0).collect();
             (changed, ratio, mask)
         }
@@ -358,35 +484,59 @@ impl FrameKernels for CudaKernels {
         }
         let n = nw * nh;
         unsafe {
-            let alloc = match self._lib.get::<unsafe extern "C" fn(*mut CUdeviceptr, usize) -> i32>(b"cuMemAlloc_v2\0") {
-                Ok(f) => f, Err(_) => return crate::filter::scale_nearest_cpu(rgb, w, h, factor),
+            let alloc = match self
+                ._lib
+                .get::<unsafe extern "C" fn(*mut CUdeviceptr, usize) -> i32>(b"cuMemAlloc_v2\0")
+            {
+                Ok(f) => f,
+                Err(_) => return crate::filter::scale_nearest_cpu(rgb, w, h, factor),
             };
-            let h2d = match self._lib.get::<unsafe extern "C" fn(CUdeviceptr, *const c_void, usize) -> i32>(b"cuMemcpyHtoD_v2\0") {
-                Ok(f) => f, Err(_) => return crate::filter::scale_nearest_cpu(rgb, w, h, factor),
+            let h2d = match self
+                ._lib
+                .get::<unsafe extern "C" fn(CUdeviceptr, *const c_void, usize) -> i32>(
+                    b"cuMemcpyHtoD_v2\0",
+                ) {
+                Ok(f) => f,
+                Err(_) => return crate::filter::scale_nearest_cpu(rgb, w, h, factor),
             };
-            let d2h = match self._lib.get::<unsafe extern "C" fn(*mut c_void, CUdeviceptr, usize) -> i32>(b"cuMemcpyDtoH_v2\0") {
-                Ok(f) => f, Err(_) => return crate::filter::scale_nearest_cpu(rgb, w, h, factor),
+            let d2h = match self
+                ._lib
+                .get::<unsafe extern "C" fn(*mut c_void, CUdeviceptr, usize) -> i32>(
+                    b"cuMemcpyDtoH_v2\0",
+                ) {
+                Ok(f) => f,
+                Err(_) => return crate::filter::scale_nearest_cpu(rgb, w, h, factor),
             };
-            let free = match self._lib.get::<unsafe extern "C" fn(CUdeviceptr) -> i32>(b"cuMemFree_v2\0") {
-                Ok(f) => f, Err(_) => return crate::filter::scale_nearest_cpu(rgb, w, h, factor),
+            let free = match self
+                ._lib
+                .get::<unsafe extern "C" fn(CUdeviceptr) -> i32>(b"cuMemFree_v2\0")
+            {
+                Ok(f) => f,
+                Err(_) => return crate::filter::scale_nearest_cpu(rgb, w, h, factor),
             };
 
             let mut ds: CUdeviceptr = 0;
             let mut dd: CUdeviceptr = 0;
             if alloc(&mut ds, rgb.len()) != 0 || alloc(&mut dd, n * 3) != 0 {
-                let _ = free(ds); let _ = free(dd);
+                let _ = free(ds);
+                let _ = free(dd);
                 return crate::filter::scale_nearest_cpu(rgb, w, h, factor);
             }
             if h2d(ds, rgb.as_ptr() as *const c_void, rgb.len()) != 0 {
-                let _ = free(ds); let _ = free(dd);
+                let _ = free(ds);
+                let _ = free(dd);
                 return crate::filter::scale_nearest_cpu(rgb, w, h, factor);
             }
-            let ok = self.launch(self.f_scale, n, 256,
-                    &[ds, dd, w as u64, h as u64, nw as u64, nh as u64])
-                && self.ctx_sync();
+            let ok = self.launch(
+                self.f_scale,
+                n,
+                256,
+                &[ds, dd, w as u64, h as u64, nw as u64, nh as u64],
+            ) && self.ctx_sync();
             let mut out = vec![0u8; n * 3];
             let ok = ok && d2h(out.as_mut_ptr() as *mut c_void, dd, out.len()) == 0;
-            let _ = free(ds); let _ = free(dd);
+            let _ = free(ds);
+            let _ = free(dd);
             if !ok {
                 return crate::filter::scale_nearest_cpu(rgb, w, h, factor);
             }

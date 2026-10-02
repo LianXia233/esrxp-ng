@@ -4,9 +4,10 @@
 //!   1. 逐帧（frame_skip 跳读）在裁切区域内做全帧帧差预筛（pixel_difference +
 //!      ignore_change%），判定"字幕变化帧"；
 //!   2. 对变化帧过滤 + 后处理得到字幕 mask（运算走 FrameKernels：CUDA→CPU）：
-//!      - 出现     : 上一帧无字幕、当前有字幕 → 记录候选（开段）
-//!      - 消失     : 上一帧有字幕、当前无字幕 → 记录封口帧，结束当前段
-//!      - 内容变化 : 两帧都有字幕但 mask 内容差异显著 → 记录候选（开新段）
+//!      - 出现：上一帧无字幕、当前有字幕 → 记录候选（开段）
+//!      - 消失：上一帧有字幕、当前无字幕 → 记录封口帧，结束当前段
+//!      - 内容变化：两帧都有字幕但 mask 内容差异显著 → 记录候选（开新段）
+//!
 //!      静止显示期 mask 稳定 → 不重复记录；
 //!   3. 按内容相似性 + gap_frames 分段（事件=出现帧→消失帧，完整覆盖显示期）；
 //!   4. 内容近似且时间相邻的事件合并（合并重复字幕）。
@@ -29,18 +30,18 @@ pub struct SubtitleEvent {
     pub end: f64,
     pub start_frame: i64,
     pub end_frame: i64,
-    pub image: Vec<u8>,        // bbox 裁切 RGB24
+    pub image: Vec<u8>, // bbox 裁切 RGB24
     pub image_w: usize,
     pub image_h: usize,
-    pub mask: Vec<u8>,         // 与 image 同尺寸 0/255
-    pub roi_mask: Vec<u8>,     // 全 ROI 尺寸 0/255
+    pub mask: Vec<u8>,     // 与 image 同尺寸 0/255
+    pub roi_mask: Vec<u8>, // 全 ROI 尺寸 0/255
     pub roi_w: usize,
     pub roi_h: usize,
-    pub bbox: (i64, i64, i64, i64),   // (x, y, w, h) ROI 内
-    pub roi_origin: (i64, i64),       // ROI 原点在原始帧中的坐标
+    pub bbox: (i64, i64, i64, i64), // (x, y, w, h) ROI 内
+    pub roi_origin: (i64, i64),     // ROI 原点在原始帧中的坐标
     pub diff_frames: i64,
     pub source_frame: i64,
-    pub deleted: bool,         // 字幕管理器：标记删除（Show/Hide Deleted / Purge）
+    pub deleted: bool, // 字幕管理器：标记删除（Show/Hide Deleted / Purge）
 }
 
 #[derive(Debug, Clone)]
@@ -51,6 +52,8 @@ pub struct RipResult {
     pub candidates: i64,
     pub frames_processed: i64,
     pub elapsed_s: f64,
+    /// 抓取时生效的配置快照（随 job 结果下发给前端/写入日志，勿删）
+    #[allow(dead_code)]
     pub config: serde_json::Value,
 }
 
@@ -58,11 +61,11 @@ pub struct RipResult {
 struct Candidate {
     idx: i64,
     time: f64,
-    roi: Option<Vec<u8>>,      // 裁切后 RGB24（仅非空候选保存）
-    mask: Vec<u8>,             // ROI 尺寸 0/255
+    roi: Option<Vec<u8>>, // 裁切后 RGB24（仅非空候选保存）
+    mask: Vec<u8>,        // ROI 尺寸 0/255
     rw: usize,
     rh: usize,
-    roi_origin: (i64, i64),    // ROI 左上角在原始帧中的坐标
+    roi_origin: (i64, i64), // ROI 左上角在原始帧中的坐标
     close_only: bool,
 }
 
@@ -95,9 +98,9 @@ fn mask_iou(a: &[u8], b: &[u8]) -> f64 {
 fn union_masks(frames: &[Candidate]) -> Vec<u8> {
     let mut u = vec![0u8; frames[0].mask.len()];
     for f in frames {
-        for i in 0..u.len() {
-            if f.mask[i] > 0 {
-                u[i] = 255;
+        for (dst, src) in u.iter_mut().zip(f.mask.iter()) {
+            if *src > 0 {
+                *dst = 255;
             }
         }
     }
@@ -130,7 +133,11 @@ fn union_masks2(a: &[u8], b: &[u8]) -> Vec<u8> {
 /// 因此统一为：`>0 返回实际缩放，否则按不缩放(1.0)处理`。
 pub fn roi_scale(cfg: &AppConfig) -> f64 {
     let s = cfg.region.scale * cfg.preview.scale_video.max(0.05);
-    if s > 1e-6 { s } else { 1.0 }
+    if s > 1e-6 {
+        s
+    } else {
+        1.0
+    }
 }
 
 /// 裁切 ROI + 缩放 + 锐化（缩放走 FrameKernels：CUDA→CPU）。
@@ -196,8 +203,11 @@ fn sharpen3(rgb: &[u8], w: usize, h: usize) -> Vec<u8> {
 }
 
 // ------------------------------------------------------------------ 主流程
-pub fn rip<F>(video: &mut VideoSource, cfg: &AppConfig,
-              mut on_progress: Option<F>) -> Result<RipResult>
+pub fn rip<F>(
+    video: &mut VideoSource,
+    cfg: &AppConfig,
+    mut on_progress: Option<F>,
+) -> Result<RipResult>
 where
     F: FnMut(i64, i64, i64),
 {
@@ -236,8 +246,8 @@ where
 
         if let Some(ref prev) = prev_roi {
             let (changed, ratio, changed_mask) = k.frame_diff(prev, &roi, rcfg.diff_threshold);
-            let is_change = changed >= rcfg.pixel_difference
-                && ratio * 100.0 >= rcfg.ignore_change_percent;
+            let is_change =
+                changed >= rcfg.pixel_difference && ratio * 100.0 >= rcfg.ignore_change_percent;
             if is_change {
                 diff_frames += 1;
 
@@ -272,7 +282,8 @@ where
                             time: fd.time,
                             roi: Some(roi.clone()),
                             mask: mask.clone(),
-                            rw, rh,
+                            rw,
+                            rh,
                             roi_origin: origin,
                             close_only: false,
                         });
@@ -284,20 +295,25 @@ where
                         time: fd.time,
                         roi: None,
                         mask: Vec::new(),
-                        rw, rh,
+                        rw,
+                        rh,
                         roi_origin: origin,
                         close_only: true,
                     });
                     prev_mask = None;
                 } else if changed_mask.iter().any(|v| *v) {
                     // 有帧差区域但颜色过滤后为空 → 被过滤掉的候选（Recover Filtered）
-                    let mask8: Vec<u8> = changed_mask.iter().map(|b| if *b { 255 } else { 0 }).collect();
+                    let mask8: Vec<u8> = changed_mask
+                        .iter()
+                        .map(|b| if *b { 255 } else { 0 })
+                        .collect();
                     filtered_candidates.push(Candidate {
                         idx: fd.index,
                         time: fd.time,
                         roi: Some(roi.clone()),
                         mask: mask8,
-                        rw, rh,
+                        rw,
+                        rh,
                         roi_origin: origin,
                         close_only: false,
                     });
@@ -387,10 +403,18 @@ fn segment(candidates: &[Candidate], fps: f64, gap: i64) -> Vec<SubtitleEvent> {
     events
 }
 
-fn make_event(frames: &[Candidate], fps: f64,
-              close_at: Option<f64>, close_frame: Option<i64>) -> SubtitleEvent {
+fn make_event(
+    frames: &[Candidate],
+    fps: f64,
+    close_at: Option<f64>,
+    close_frame: Option<i64>,
+) -> SubtitleEvent {
     let first = &frames[0];
-    let last = frames.iter().rev().find(|f| f.roi.is_some()).unwrap_or(&frames[0]);
+    let last = frames
+        .iter()
+        .rev()
+        .find(|f| f.roi.is_some())
+        .unwrap_or(&frames[0]);
     let frame_dur = 1.0 / fps;
     let end = close_at.unwrap_or(last.time + frame_dur);
     let end_frame = close_frame.unwrap_or(last.idx);
@@ -398,11 +422,35 @@ fn make_event(frames: &[Candidate], fps: f64,
     let (w, h) = (frames[0].rw, frames[0].rh);
     let mut roi_mask = vec![0u8; w * h];
     for f in frames {
-        for i in 0..w * h {
-            if f.mask[i] > 0 {
-                roi_mask[i] = 255;
+        for (dst, src) in roi_mask.iter_mut().zip(f.mask.iter()) {
+            if *src > 0 {
+                *dst = 255;
             }
         }
+    }
+    // 兜底：全空 mask 会让下面 min/max 落到初值，算出负的 bw/bh 并产出尺寸错误的
+    // image/mask，下游按 bbox 索引即越权。当前所有调用点都保证非空
+    // （candidates 仅在 cur_nonempty 时入列，filtered 仅在 changed_mask.any() 时入列），
+    // 此处仅作防御——回退成 1x1 空事件而非产出畸形数据。
+    if roi_mask.iter().all(|v| *v == 0) {
+        return SubtitleEvent {
+            start: first.time,
+            end,
+            start_frame: first.idx,
+            end_frame,
+            image: vec![0u8; 3],
+            image_w: 1,
+            image_h: 1,
+            mask: vec![0u8; 1],
+            roi_mask,
+            roi_w: w,
+            roi_h: h,
+            bbox: (0, 0, 1, 1),
+            roi_origin: first.roi_origin(),
+            diff_frames: frames.len() as i64,
+            source_frame: last.idx,
+            deleted: false,
+        };
     }
     let mut min_x = w as i64;
     let mut min_y = h as i64;
@@ -423,8 +471,8 @@ fn make_event(frames: &[Candidate], fps: f64,
     let mut image = Vec::with_capacity((bw * bh * 3) as usize);
     for y in by..by + bh {
         for x in bx..bx + bw {
-            let src = ((y as usize) * w + x as usize);
-            mask[((y - by) as usize * bw as usize + (x - bx) as usize)] = roi_mask[src];
+            let src = (y as usize) * w + x as usize;
+            mask[(y - by) as usize * bw as usize + (x - bx) as usize] = roi_mask[src];
             let ps = src * 3;
             image.extend_from_slice(&roi[ps..ps + 3]);
         }
@@ -453,7 +501,12 @@ fn merge_repeat(events: Vec<SubtitleEvent>, fps: f64, force: bool) -> Vec<Subtit
     merge_repeat_with(events, force, 0.9, 2.0 / fps)
 }
 
-fn merge_repeat_with(events: Vec<SubtitleEvent>, force: bool, iou_threshold: f64, max_gap_time: f64) -> Vec<SubtitleEvent> {
+fn merge_repeat_with(
+    events: Vec<SubtitleEvent>,
+    force: bool,
+    iou_threshold: f64,
+    max_gap_time: f64,
+) -> Vec<SubtitleEvent> {
     if events.is_empty() {
         return events;
     }
@@ -490,8 +543,8 @@ fn merge_repeat_with(events: Vec<SubtitleEvent>, force: bool, iou_threshold: f64
             let mut mask = vec![0u8; (bw * bh) as usize];
             for y in by..by + bh {
                 for x in bx..bx + bw {
-                    mask[((y - by) as usize * bw as usize + (x - bx) as usize)]
-                        = prev.roi_mask[(y as usize) * w + x as usize];
+                    mask[(y - by) as usize * bw as usize + (x - bx) as usize] =
+                        prev.roi_mask[(y as usize) * w + x as usize];
                 }
             }
             prev.bbox = (bx, by, bw, bh);
@@ -501,8 +554,13 @@ fn merge_repeat_with(events: Vec<SubtitleEvent>, force: bool, iou_threshold: f64
             {
                 let (ubx, uby, ubw, ubh) = prev.bbox;
                 let mut canvas = vec![0u8; w * h * 3];
-                let mut place = |canvas: &mut [u8], img: &[u8], bbox: (i64, i64, i64, i64)| {
-                    let (ex, ey, ew, eh) = (bbox.0 as usize, bbox.1 as usize, bbox.2 as usize, bbox.3 as usize);
+                let place = |canvas: &mut [u8], img: &[u8], bbox: (i64, i64, i64, i64)| {
+                    let (ex, ey, ew, eh) = (
+                        bbox.0 as usize,
+                        bbox.1 as usize,
+                        bbox.2 as usize,
+                        bbox.3 as usize,
+                    );
                     for y in 0..eh {
                         for x in 0..ew {
                             let d = ((ey + y) * w + ex + x) * 3;
@@ -538,14 +596,22 @@ fn merge_repeat_with(events: Vec<SubtitleEvent>, force: bool, iou_threshold: f64
 /// 产出更干净的 bbox/image/mask（对齐 esrXP Crop 语义）。
 /// 字幕管理器「合并重复」（对齐 esrXP MIMergeRepeat）：对事件列表按 mask 相似度一键合并。
 /// 事件须已按 start 排序；返回 (合并后列表, 被合并掉条数)。
-pub fn merge_repeat_manual(events: Vec<SubtitleEvent>, iou_threshold: f64, max_gap_s: f64) -> (Vec<SubtitleEvent>, usize) {
+pub fn merge_repeat_manual(
+    events: Vec<SubtitleEvent>,
+    iou_threshold: f64,
+    max_gap_s: f64,
+) -> (Vec<SubtitleEvent>, usize) {
     let before = events.len();
     let merged = merge_repeat_with(events, false, iou_threshold, max_gap_s);
     let removed = before - merged.len();
     (merged, removed)
 }
 
-pub fn crop_event(video: &mut VideoSource, cfg: &AppConfig, ev: &SubtitleEvent) -> Result<SubtitleEvent> {
+pub fn crop_event(
+    video: &mut VideoSource,
+    cfg: &AppConfig,
+    ev: &SubtitleEvent,
+) -> Result<SubtitleEvent> {
     let k: &dyn FrameKernels = kernels();
     let pcfg = cfg.postprocess.clone();
     let fcfg = cfg.filter.clone();
@@ -557,8 +623,14 @@ pub fn crop_event(video: &mut VideoSource, cfg: &AppConfig, ev: &SubtitleEvent) 
         let mask = clean(&k.filter(&roi, rw, rh, &fcfg), rw, rh, &pcfg);
         if mask.iter().any(|v| *v > 0) {
             cands.push(Candidate {
-                idx: fd.index, time: fd.time,
-                roi: Some(roi), mask, rw, rh, roi_origin: origin, close_only: false,
+                idx: fd.index,
+                time: fd.time,
+                roi: Some(roi),
+                mask,
+                rw,
+                rh,
+                roi_origin: origin,
+                close_only: false,
             });
         }
         Ok(())
@@ -584,7 +656,11 @@ mod tests {
     #[test]
     fn roi_scale_default_is_one_not_zero() {
         let cfg = AppConfig::default();
-        assert_eq!(roi_scale(&cfg), 1.0, "默认不缩放必须等效 1.0（原实现返回 0）");
+        assert_eq!(
+            roi_scale(&cfg),
+            1.0,
+            "默认不缩放必须等效 1.0（原实现返回 0）"
+        );
     }
 
     #[test]

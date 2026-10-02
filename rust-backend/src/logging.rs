@@ -49,7 +49,11 @@ struct Chan {
 
 impl Chan {
     fn empty() -> Self {
-        Chan { file: None, path: None, bytes: 0 }
+        Chan {
+            file: None,
+            path: None,
+            bytes: 0,
+        }
     }
 }
 
@@ -95,7 +99,9 @@ unsafe fn fill_local(ts: libc::time_t, out: &mut libc::tm) {
 
 /// 当前本地时间 `YYYY-MM-DD HH:MM:SS.mmm`
 fn stamp() -> String {
-    let d = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let d = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
     let ms = d.subsec_millis();
     let secs = d.as_secs() as libc::time_t;
     unsafe {
@@ -127,7 +133,11 @@ fn rotate(p: &Path) {
     }
     let mut i = KEEP_BACKUPS - 1;
     loop {
-        let src = if i == 0 { p.to_path_buf() } else { backup_path(p, i) };
+        let src = if i == 0 {
+            p.to_path_buf()
+        } else {
+            backup_path(p, i)
+        };
         let dst = backup_path(p, i + 1);
         if src.exists() {
             let _ = std::fs::rename(&src, &dst);
@@ -149,7 +159,11 @@ fn open_chan(dir: &Path, name: &str) -> Chan {
     let file = OpenOptions::new().create(true).append(true).open(&p).ok();
     let bytes = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
     if file.is_some() {
-        Chan { file, path: Some(p), bytes }
+        Chan {
+            file,
+            path: Some(p),
+            bytes,
+        }
     } else {
         Chan::empty()
     }
@@ -168,8 +182,12 @@ fn write_chan(ch: &mut Chan, line: &str) {
         ch.bytes = 0;
         if let Some(p) = prev {
             rotate(&p);
-            let nc = open_chan(p.parent().unwrap_or_else(|| Path::new(".")),
-                               p.file_name().and_then(|s| s.to_str()).unwrap_or("esrxp.log"));
+            let nc = open_chan(
+                p.parent().unwrap_or_else(|| Path::new(".")),
+                p.file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("esrxp.log"),
+            );
             ch.file = nc.file;
             ch.bytes = nc.bytes;
             ch.path = nc.path.or(Some(p));
@@ -214,7 +232,11 @@ pub fn session_path() -> Option<String> {
 
 /// 记录一条日志（level 建议 INFO / WARN / ERROR / DEBUG）
 pub fn record(level: &str, msg: &str) {
-    let e = Entry { ts: stamp(), level: level.to_string(), msg: msg.to_string() };
+    let e = Entry {
+        ts: stamp(),
+        level: level.to_string(),
+        msg: msg.to_string(),
+    };
     let line = e.line();
     let mut g = lock();
     if g.mem.len() >= MAX_MEM {
@@ -254,7 +276,11 @@ pub fn debug<M: AsRef<str>>(m: M) {
 pub fn tail_lines(n: usize) -> Vec<String> {
     let g = lock();
     let n = n.min(g.mem.len());
-    g.mem.iter().skip(g.mem.len() - n).map(|e| e.line().trim_end().to_string()).collect()
+    g.mem
+        .iter()
+        .skip(g.mem.len() - n)
+        .map(|e| e.line().trim_end().to_string())
+        .collect()
 }
 
 /// 读取磁盘日志文件尾部（`max_lines` 行，按 UTF-8 有损解码）
