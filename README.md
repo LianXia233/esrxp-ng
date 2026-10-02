@@ -79,6 +79,22 @@ npm start        # 开发运行（自动 spawn 后端二进制）
 npm run dist:win # Win11 打包：NSIS 安装包 + 便携版（需 Windows 或 CI）
 ```
 
+## 版本与发布
+
+当前版本：**0.6.2**
+
+| 平台 | 产物 | 说明 |
+| --- | --- | --- |
+| Windows x64 | `.exe`（NSIS 安装包）、`.zip`（便携版） | 后端 `x86_64-pc-windows-gnu` 编译，FFmpeg 9.0 共享库 DLL 随包分发 |
+| Debian / Ubuntu x64 | `.deb` | 后端 `--features vendored-ffmpeg` 静态链接，单二进制零依赖 |
+
+下载：仓库 [Releases 页面](https://github.com/LianXia233/esrxp-ng/releases) 提供的最新 tag 资产。
+
+发布由 `.github/workflows/build.yml` 驱动：推送 `v*` tag 触发，静态检查（`cargo fmt --check` + `cargo clippy -D warnings` + `cargo test --lib`）通过后并行产出 Windows 与 Debian 包，`softprops/action-gh-release` 自动创建 Release 并附带 changelog。
+
+> 仓库仅保留最新 Release。此前 v0.1.0 ~ v0.6.0 的历史 Release 与 tag 已于 2026-10-02 清理，
+> 版本号可重新使用。v0.6.1 从未产出发布件，其变更已并入 0.6.2 的开发过程，内容完整保留于本文件下方条目。
+
 ## 逆向原理（从 esrXP）
 
 对原版 esrXP.exe（Delphi 5 PE32）静态逆向得出硬字幕抓取流水线：
