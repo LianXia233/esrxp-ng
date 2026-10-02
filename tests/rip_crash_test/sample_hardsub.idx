@@ -1,0 +1,20 @@
+# VobSub index file, v7 (do not modify this line!)
+size: 1280x720
+org: 0, 0
+scale: 100%, 100%
+smooth: OFF
+fade: 0, 0
+align: 0, 0
+time offset: 0
+forced subs: OFF
+# Custom colors (transp idxs and the four colors)
+custom colors: OFF, tridx: 1110, colors: 0, 0, ffffff, 000000
+# The original palette of the DVD in PGC#1
+palette: 008080, ff8080, ff8080, 008080, 000000, 000000, 000000, 000000, 000000, 000000, 000000, 000000, 000000, 000000, 000000, 000000
+langidx: 0
+# Decomment next line to activate alternative name in DirectVobSub / Windows Media Player 6.x
+# Force subtitle placement relative to (org.x, org.y)
+id: en, index: 0
+timestamp: 00:00:00:520, filepos: 000000000
+timestamp: 00:00:02:000, filepos: 000000bac
+timestamp: 00:00:03:520, filepos: 00000170b

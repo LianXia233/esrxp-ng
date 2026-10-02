@@ -290,14 +290,21 @@ impl VideoSource {
                         if (idx - start) % step == 0 {
                             let mut rgb = Video::empty();
                             scaler.run(&f, &mut rgb)?;
-                            let data = copy_rgb24(&rgb, self.width, self.height);
+                            // 以实际输出尺寸为准：异常流（旋转元数据、尺寸在首帧后才稳定、
+                            // 交错流宽高与流参数不一致等）scaler 输出可能与流参数宽高不同，
+                            // 按 self.width/height 拷贝会越界（slice panic → 后端进程崩溃）。
+                            let (ow, oh) = (rgb.width() as usize, rgb.height() as usize);
+                            if ow == 0 || oh == 0 {
+                                continue;
+                            }
+                            let data = copy_rgb24(&rgb, ow, oh);
                             *produced = true;
                             cb(FrameData {
                                 index: idx,
                                 time: frame_seconds(&f, self.time_base, idx),
                                 rgb: data,
-                                width: self.width,
-                                height: self.height,
+                                width: ow,
+                                height: oh,
                             })?;
                         }
                     }
@@ -563,12 +570,20 @@ fn fps_of(_idx: i64, _tb: f64) -> f64 {
 }
 
 /// 从 swscale 输出的 packed RGB24 帧按行拷贝（行对齐可能 > w*3）。
+/// 防御：以传入尺寸为准但逐行做边界截断，任何异常帧尺寸都不会越界。
 fn copy_rgb24(frame: &frame::Video, width: usize, height: usize) -> Vec<u8> {
     let src = frame.data(0);
-    let stride = frame.stride(0);
+    let stride = frame.stride(0).max(width * 3) as usize;
     let mut out = Vec::with_capacity(width * height * 3);
     for row in 0..height {
-        out.extend_from_slice(&src[row * stride..row * stride + width * 3]);
+        let start = row * stride;
+        if start >= src.len() {
+            break;
+        }
+        let end = (start + width * 3).min(src.len());
+        if start < end {
+            out.extend_from_slice(&src[start..end]);
+        }
     }
     out
 }

@@ -369,6 +369,20 @@ fn apply_colors(fcfg: &mut crate::config::FilterConfig, main: (u8, u8, u8), outl
 }
 
 // ------------------------------------------------------------------ 分段与合并
+/// 段内非末位候选的 roi（全 ROI RGB24）在 make_event 中从不使用（只用最后一次
+/// 出现帧的 roi 重建 image），提前回收避免大量字幕时内存峰值被全帧 ROI 撑爆
+/// （动画片数百条字幕 × 全帧 2.7MB 可轻松到 GB 级 → OOM / 后端进程被系统杀死）。
+fn drop_roi_except_last(cur: &mut Vec<Candidate>) {
+    let Some(li) = cur.iter().rposition(|f| f.roi.is_some()) else {
+        return;
+    };
+    for (i, f) in cur.iter_mut().enumerate() {
+        if i != li && f.roi.is_some() {
+            f.roi = None;
+        }
+    }
+}
+
 fn segment(candidates: &[Candidate], fps: f64, gap: i64) -> Vec<SubtitleEvent> {
     if candidates.is_empty() {
         return vec![];
@@ -378,6 +392,7 @@ fn segment(candidates: &[Candidate], fps: f64, gap: i64) -> Vec<SubtitleEvent> {
     for c in candidates {
         if c.close_only {
             if !cur.is_empty() {
+                drop_roi_except_last(&mut cur);
                 events.push(make_event(&cur, fps, Some(c.time), Some(c.idx)));
                 cur.clear();
             }
@@ -392,12 +407,14 @@ fn segment(candidates: &[Candidate], fps: f64, gap: i64) -> Vec<SubtitleEvent> {
         if same || within_gap {
             cur.push(c.clone());
         } else {
+            drop_roi_except_last(&mut cur);
             events.push(make_event(&cur, fps, None, None));
             cur.clear();
             cur.push(c.clone());
         }
     }
     if !cur.is_empty() {
+        drop_roi_except_last(&mut cur);
         events.push(make_event(&cur, fps, None, None));
     }
     events
@@ -513,6 +530,15 @@ fn merge_repeat_with(
     let mut merged: Vec<SubtitleEvent> = vec![events[0].clone()];
     for ev in events.into_iter().skip(1) {
         let prev = merged.last_mut().unwrap();
+        // 防御：任一侧 roi_mask 全空（防御性 1x1 空事件）时跳过合并——
+        // 否则并集 bbox 重算会得负宽高，`(bw*bh) as usize` 在 release 下
+        // 变成巨大数触发分配失败 abort（后端进程崩溃）。
+        if prev.roi_mask.iter().all(|v| *v == 0)
+            || ev.roi_mask.iter().all(|v| *v == 0)
+        {
+            merged.push(ev);
+            continue;
+        }
         let iou = mask_iou(&prev.roi_mask, &ev.roi_mask);
         let gap_time = ev.start - prev.end;
         if force || (iou >= iou_threshold && gap_time <= max_gap_time) {

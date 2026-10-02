@@ -4,6 +4,7 @@
 
 - **Rust 后端**：FFmpeg（ffmpeg-next）解码 + 硬字幕抓取引擎 + axum HTTP API
 - **GPU 优先**：解码层自动探测 CUDA NVDEC（Windows D3D11VA / Linux VAAPI），失败自动回退 CPU；像素过滤/帧差/缩放内核有 CUDA PTX 与纯 Rust 双实现，运行时按硬件选择
+- **egui 原生 GUI（MVP，0.7.0 起）**：纯 Rust egui/eframe 桌面界面，覆盖打开视频/工程 → 参数 → 预览 → 抓取 → 产物查看/保存；后端以子进程随 GUI 启动，HTTP 127.0.0.1 通信
 - **TDesign UI**：Vue 3 + TDesign v1.10.5（本地 vendor，无构建链，开箱即用）
 - **Electron 外壳**：Win11 目标，electron-builder 出 NSIS 安装包 / 便携版；0.4.0 起打包态经命名管道（Windows）/ Unix socket（Linux）与后端通信，**不监听任何网络端口**，UI 本地加载，免疫端口占用与系统代理劫持
 - **输出**：VobSub（.sub/.idx，4-bit RLE）、SSA（矢量轮廓）、OCR 位图（PNG/JPG/BMP，按字幕选区裁剪，抗锯齿 + 可后处理）、SRT 时间轴（无文本）、时间轴 JSON、工程 JSON
@@ -25,6 +26,7 @@ esrxp-ng/
 │   │   ├── api.rs           # axum：open/preview/rip/job/artifact + 静态托管
 │   │   └── main.rs          # CLI：rip / serve / dump-config / dbg
 │   └── Cargo.toml
+├── egui-ui/                 # egui/eframe 原生 GUI（MVP：打开/参数/预览/抓取/产物）
 ├── ui/                      # TDesign Vue3 单页（index.html + vendor/，预览查看器 + OCR 选区拖拽）
 ├── electron/                # Electron 外壳（main/preload/package.json/smoke.js，asarUnpack 解包）
 ├── tests/                   # 端到端验证产物（rust_out=Rust、out=历史基线）
@@ -70,6 +72,22 @@ cargo build --release
 # 浏览器打开 http://127.0.0.1:18081
 ```
 
+### egui 原生 GUI（0.7.0，MVP）
+
+```bash
+# 依赖（Ubuntu/Debian）：egui/eframe 需要 GTK3 与 xkbcommon
+apt install -y libgtk-3-dev libxkbcommon-dev
+
+# 先构建后端（egui GUI 以子进程方式启动后端）
+cd rust-backend && cargo build && cd ..
+
+cd egui-ui
+cargo build --release
+./target/release/esrxp-ng-ui   # 自动发现并启动后端（优先 ESRXP_BACKEND / 同目录 / rust-backend 开发产物）
+```
+
+MVP 覆盖：打开视频/工程 → 参数配置 → 预览（raw/mask/overlay/combo/ocr）→ 抓取进度 → 产物查看/保存。字幕管理器 / 批处理 / 日志面板留待后续迭代。
+
 ### Electron 桌面版
 
 ```bash
@@ -81,7 +99,7 @@ npm run dist:win # Win11 打包：NSIS 安装包 + 便携版（需 Windows 或 C
 
 ## 版本与发布
 
-当前版本：**0.6.2**
+当前版本：**0.7.0**
 
 | 平台 | 产物 | 说明 |
 | --- | --- | --- |

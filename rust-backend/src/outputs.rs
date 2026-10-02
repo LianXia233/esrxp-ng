@@ -695,23 +695,115 @@ pub fn event_from_roi(rgb: &[u8], rw: usize, rh: usize, mask: &[u8]) -> Option<S
     })
 }
 
+/// 渲染前 mask 预处理：despeckle 去小噪点簇（面积 ≤ min_area），再对结果做
+/// 闭运算（先膨胀 1px 后腐蚀 1px）——填内部小孔、抹平视频压缩在笔画边缘的
+/// 毛刺，同时保留 1px 细笔画（闭运算不删除笔画，与开运算/仅 despeckle 不同）。
+/// 返回 0/255 mask。
+fn preprocess_mask(mask: &[u8], w: usize, h: usize, min_area: usize) -> Vec<u8> {
+    let d = crate::postprocess::despeckle(mask, w, h, min_area);
+    if w == 0 || h == 0 {
+        return d;
+    }
+    // 3x3 膨胀
+    let mut dil = vec![0u8; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            if d[y * w + x] > 0 {
+                let (x0, x1) = (x.saturating_sub(1), (x + 1).min(w - 1));
+                let (y0, y1) = (y.saturating_sub(1), (y + 1).min(h - 1));
+                for yy in y0..=y1 {
+                    for xx in x0..=x1 {
+                        dil[yy * w + xx] = 255;
+                    }
+                }
+            }
+        }
+    }
+    // 3x3 腐蚀（全命中才保留，缩回膨胀带来的扩张）
+    let mut ero = vec![0u8; w * h];
+    for y in 0..h {
+        for x in 0..w {
+            let (x0, x1) = (x.saturating_sub(1), (x + 1).min(w - 1));
+            let (y0, y1) = (y.saturating_sub(1), (y + 1).min(h - 1));
+            let mut all = true;
+            for yy in y0..=y1 {
+                for xx in x0..=x1 {
+                    if dil[yy * w + xx] == 0 {
+                        all = false;
+                        break;
+                    }
+                }
+                if !all {
+                    break;
+                }
+            }
+            if all {
+                ero[y * w + x] = 255;
+            }
+        }
+    }
+    ero
+}
+
+/// 覆盖率场边缘平滑：仅对过渡带（0.05..0.95）像素做 3x3 高斯加权，
+/// 内部实心（cov≈1）与背景（cov≈0）保持不动，避免侵蚀细笔画。
+/// 效果：把 1px 硬过渡扩展成 ~2px 柔和过渡，肉眼锯齿明显减弱。
+fn smooth_coverage(cov: &[f64], w: usize, h: usize) -> Vec<f64> {
+    if w == 0 || h == 0 {
+        return cov.to_vec();
+    }
+    // 高斯核（中心 4 / 邻 2 / 对角 1），归一化 16
+    const K: [[f64; 3]; 3] = [[1.0, 2.0, 1.0], [2.0, 4.0, 2.0], [1.0, 2.0, 1.0]];
+    let mut out = cov.to_vec();
+    for y in 0..h {
+        for x in 0..w {
+            let c = cov[y * w + x];
+            if c < 0.05 || c > 0.95 {
+                continue;
+            }
+            let mut acc = 0.0f64;
+            let mut n = 0.0f64;
+            for dy in -1i64..=1 {
+                for dx in -1i64..=1 {
+                    let ny = y as i64 + dy;
+                    let nx = x as i64 + dx;
+                    if ny < 0 || ny >= h as i64 || nx < 0 || nx >= w as i64 {
+                        continue;
+                    }
+                    let k = K[(dy + 1) as usize][(dx + 1) as usize];
+                    acc += cov[ny as usize * w + nx as usize] * k;
+                    n += k;
+                }
+            }
+            if n > 0.0 {
+                out[y * w + x] = acc / n;
+            }
+        }
+    }
+    out
+}
+
 /// 单条字幕位图重建（含缩放）：以 mask 覆盖率驱动的抗锯齿合成取代二值放大。
 pub fn render_subtitle_tile(ev: &SubtitleEvent, ocr: &OcrConfig) -> Option<image::RgbaImage> {
     let (sw, sh) = (ev.image_w, ev.image_h);
     if sw == 0 || sh == 0 {
         return None;
     }
-    // 渲染前先除噪：移除面积 ≤ despeckle_min_area 的孤立噪点簇，
-    // 消除 OCR / 位图缩略图上的椒盐噪声（clean 只处理单点/单线）。
+    // 渲染前除噪 + 闭运算：去掉面积 ≤ despeckle_min_area 的孤立噪点簇，
+    // 抹平笔画边缘毛刺（clean 只处理单点/单线，压缩马赛克簇会残留成脏点）。
     let packed = ocr.despeckle_min_area.max(0) as usize;
     let src_mask: std::borrow::Cow<[u8]> = if packed > 0 {
-        std::borrow::Cow::Owned(crate::postprocess::despeckle(&ev.mask, sw, sh, packed))
+        std::borrow::Cow::Owned(preprocess_mask(&ev.mask, sw, sh, packed))
     } else {
         std::borrow::Cow::Borrowed(&ev.mask)
     };
     let scale = ocr.scale.max(0.1);
-    let dw = ((sw as f64) * scale).round().max(1.0) as usize;
-    let dh = ((sh as f64) * scale).round().max(1.0) as usize;
+    // 输出四周保底留白（2px）：bbox 是按 mask 像素包围盒裁切的，笔画天然贴边，
+    // 播放器/OCR 放大查看时上下极易被裁掉（“字幕区域截取不全”）。
+    // 把画布向外扩 2px、采样坐标整体平移，既保证笔画完整又提供安全边距。
+    let pad = 2usize;
+    let dw = ((sw as f64) * scale).round().max(1.0) as usize + pad * 2;
+    let dh = ((sh as f64) * scale).round().max(1.0) as usize + pad * 2;
     let fgc = parse_hex_rgb(&ocr.text_color, [0, 0, 0]);
     let bgc = parse_hex_rgb(&ocr.bg_color, [255, 255, 255]);
     let mode = ocr.color_mode.trim().to_ascii_lowercase();
@@ -737,8 +829,9 @@ pub fn render_subtitle_tile(ev: &SubtitleEvent, ocr: &OcrConfig) -> Option<image
             let mut acc = [0.0f64; 3];
             for sy in 0..ss {
                 for sx in 0..ss {
-                    let px_f = (x as f64 + (sx as f64 + 0.5) * step) / scale - 0.5;
-                    let py_f = (y as f64 + (sy as f64 + 0.5) * step) / scale - 0.5;
+                    // 输出像素 (x,y) 映射回源图：整体减去 pad 偏移
+                    let px_f = ((x as f64 + (sx as f64 + 0.5) * step - pad as f64) / scale) - 0.5;
+                    let py_f = ((y as f64 + (sy as f64 + 0.5) * step - pad as f64) / scale) - 0.5;
                     c += sample_mask(&src_mask[..], sw, sh, px_f, py_f);
                     if use_pixels {
                         let (r, g, b) = sample_rgb(&ev.image, sw, sh, px_f, py_f);
@@ -755,6 +848,10 @@ pub fn render_subtitle_tile(ev: &SubtitleEvent, ocr: &OcrConfig) -> Option<image
                 }
             }
         }
+    }
+    // 过渡带平滑：1px 硬过渡 → ~2px 柔和过渡（肉眼锯齿显著减弱）
+    if ocr.antialias {
+        cov = smooth_coverage(&cov, dw, dh);
     }
     // 笔画加粗：对覆盖率场做最大值滤波（形态学膨胀），软边不被破坏，细笔画变实
     let rad = ocr.stroke_dilate.clamp(0, 4);
@@ -1163,6 +1260,91 @@ pub fn write_project(
     artifacts: &serde_json::Value,
 ) -> Result<()> {
     write_esr(events, &[], video_path, cfg, out, artifacts)
+}
+
+#[cfg(test)]
+mod render_tests {
+    use super::*;
+
+    fn fake_event(w: usize, h: usize, mask: Vec<u8>) -> SubtitleEvent {
+        SubtitleEvent {
+            start: 0.0,
+            end: 1.0,
+            start_frame: 0,
+            end_frame: 1,
+            image: vec![255u8; w * h * 3],
+            image_w: w,
+            image_h: h,
+            mask,
+            roi_mask: vec![0u8; w * h],
+            roi_w: w,
+            roi_h: h,
+            bbox: (0, 0, w as i64, h as i64),
+            roi_origin: (0, 0),
+            diff_frames: 1,
+            source_frame: 0,
+            deleted: false,
+        }
+    }
+
+    /// 渲染方向验证：mask 命中区应为前景色（默认黑），空白区应为背景色（默认白）。
+    #[test]
+    fn render_fg_bg_direction() {
+        let ocr = OcrConfig::default();
+        let (w, h) = (9, 9);
+        let mut mask = vec![0u8; w * h];
+        for y in 3..6 {
+            for x in 3..6 {
+                mask[y * w + x] = 255;
+            }
+        }
+        let ev = fake_event(w, h, mask);
+        let img = render_subtitle_tile(&ev, &ocr).unwrap();
+        // render_subtitle_tile 输出四周保底 2px 留白：源图 (4,4) 平移到输出 (6,6)
+        let inside = img.get_pixel(6, 6);
+        let outside = img.get_pixel(1, 1);
+        assert!(
+            inside[0] < 100 && inside[1] < 100 && inside[2] < 100,
+            "文字区应为前景色(黑)，实际 {inside:?}"
+        );
+        assert!(
+            outside[0] > 200 && outside[1] > 200 && outside[2] > 200,
+            "空白区应为背景色(白)，实际 {outside:?}"
+        );
+    }
+
+    /// 抗锯齿有效性：scale>1 时 mask 边缘像素应产生中间灰（而非硬 0/255）。
+    #[test]
+    fn render_edge_has_gray_transition() {
+        let mut ocr = OcrConfig::default();
+        ocr.scale = 2.0;
+        ocr.antialias = true;
+        ocr.supersample = 3;
+        ocr.despeckle_min_area = 0;
+        let (w, h) = (8, 8);
+        let mut mask = vec![0u8; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                if x < 4 {
+                    mask[y * w + x] = 255; // 左半块
+                }
+            }
+        }
+        let ev = fake_event(w, h, mask);
+        let img = render_subtitle_tile(&ev, &ocr).unwrap();
+        // 垂直边界 x=8（缩放后）附近应存在非纯黑/非纯白的中间像素
+        let mut has_gray = false;
+        for y in 0..img.height() {
+            for x in 0..img.width() {
+                let p = img.get_pixel(x, y);
+                let g = (p[0] as u16 + p[1] as u16 + p[2] as u16) / 3;
+                if (10..245).contains(&g) {
+                    has_gray = true;
+                }
+            }
+        }
+        assert!(has_gray, "抗锯齿渲染在边缘应产生中间灰过渡");
+    }
 }
 
 /// .esr 工程文件（对齐 esrXP Save As .esr）：完整保存配置、字幕（含位图与
