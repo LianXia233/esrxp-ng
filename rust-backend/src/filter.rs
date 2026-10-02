@@ -40,7 +40,9 @@ pub fn segment_mask(rgb: &[u8], w: usize, h: usize, seg: &ColorSegment) -> Vec<b
         || seg.enable_sat_max;
     let hsv: Option<Vec<(i64, i64, i64)>> = if need_hsv {
         Some(
-            rgb.chunks_exact(3)
+            rgb.as_chunks::<3>()
+                .0
+                .iter()
                 .map(|p| rgb_to_hsv(p[0], p[1], p[2]))
                 .collect(),
         )
@@ -50,7 +52,7 @@ pub fn segment_mask(rgb: &[u8], w: usize, h: usize, seg: &ColorSegment) -> Vec<b
     let t = seg.rgb;
     let rd2 = seg.rgb_diff * seg.rgb_diff;
     let hue_ref = seg.hue % 180;
-    for (i, px) in rgb.chunks_exact(3).enumerate() {
+    for (i, px) in rgb.as_chunks::<3>().0.iter().enumerate() {
         if seg.enable_rgb {
             let dr = px[0] as i64 - t.0 as i64;
             let dg = px[1] as i64 - t.1 as i64;
@@ -211,7 +213,7 @@ pub fn auto_detect_colors(
     _h: usize,
 ) -> ((u8, u8, u8), (u8, u8, u8)) {
     let mut pts: Vec<(u32, [u8; 3])> = Vec::new();
-    for (i, px) in rgb.chunks_exact(3).enumerate() {
+    for (i, px) in rgb.as_chunks::<3>().0.iter().enumerate() {
         if i < diff_mask.len() && diff_mask[i] {
             let lum = px[0] as u32 + px[1] as u32 + px[2] as u32;
             pts.push((lum, [px[0], px[1], px[2]]));

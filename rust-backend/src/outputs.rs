@@ -390,7 +390,7 @@ fn encode_vobsub_frame(ev: &SubtitleEvent, main: (u8, u8, u8), outline: (u8, u8,
     // 渲染前缀去噪点簇，避免 VobSub 字幕图椒盐噪声（与 OCR/位图一致）
     let mask = crate::postprocess::despeckle(&ev.mask, w, h, 4);
     let mut nib: Vec<u8> = vec![15; w * h]; // 默认透明
-    for (i, px) in ev.image.chunks_exact(3).enumerate() {
+    for (i, px) in ev.image.as_chunks::<3>().0.iter().enumerate() {
         if mask[i] == 0 {
             continue;
         }

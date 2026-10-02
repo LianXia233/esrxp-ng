@@ -79,7 +79,7 @@ fn cmd_dbg(args: &[String]) -> Result<()> {
         let mut sum: u64 = 0;
         let mut minv = 255u8;
         let mut maxv = 0u8;
-        for px in rgb.chunks_exact(3) {
+        for px in rgb.as_chunks::<3>().0.iter() {
             for &c in px {
                 sum += c as u64;
                 if c < minv {
