@@ -2,6 +2,18 @@
 
 本项目语义化版本号（SemVer）。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [未发布] - 2026-11-12
+
+### 构建流水线
+
+- `.github/workflows/build.yml` 共 9 处 `uses:` 升级：`actions/checkout@v4` → `v7`、
+  `actions/setup-node@v4` → `v7`、`actions/cache@v4` → `v6`、
+  `softprops/action-gh-release@v2` → `v3`。
+- GitHub 已于 2026-09-23 从托管 runner 移除 Node 20 运行时，仍声明 `node20` 的 action 会被强制跑在 Node 24 上并打印 `Node.js 20 is deprecated` 告警，属于未验证状态；本次按各 action 的 `action.yml` 逐一核对 `runs.using` 后统一升级。
+- **仅改 CI 配置**：项目源码、`node-version` / `python-version` / `go-version` 等工具链版本、产物命名与 Release 流程均未改动。告警指的是 action 自身声明的运行时，不是项目构建所用的 Node 版本。
+  Windows / Debian 双流水线的产物形态、tag 触发与静态检查门禁均未改动。
+- 升级后全仓复扫 59 个工作流/Action 文件：`node20` / `node16` / `node12` 引用残留为 0，所有 YAML 均可解析。
+
 ## [0.6.2] - 2026-10-02
 
 **首个正式发布版本** —— 清理 v0.1.0 ~ v0.6.0 的全部历史 Release 与 tag，仅保留本版本作为可下载的正式件；补充 README「版本与发布」章节（平台产物对照表、CI 触发机制、发布件清理说明）。此前 0.6.1 从未产出发布件，其全部变更已并入本版本的开发过程，下方条目完整保留。
